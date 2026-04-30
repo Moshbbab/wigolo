@@ -22,9 +22,15 @@ vi.mock('../../../src/searxng/bootstrap.js', () => ({
   bootstrapNativeSearxng: vi.fn(),
 }));
 
-vi.mock('../../../src/search/flashrank.js', () => ({
-  isFlashRankAvailable: vi.fn(),
-  resetAvailabilityCache: vi.fn(),
+vi.mock('../../../src/search/reranker/download.js', () => ({
+  downloadModelAssets: vi.fn().mockResolvedValue({
+    modelPath: '/tmp/model.onnx',
+    tokenizerPath: '/tmp/tokenizer.json',
+    configPath: '/tmp/tokenizer_config.json',
+  }),
+}));
+vi.mock('../../../src/search/reranker/onnx.js', () => ({
+  onnxRerank: vi.fn().mockResolvedValue([{ index: 0, score: 0.5 }]),
 }));
 
 const mockStart = vi.fn();

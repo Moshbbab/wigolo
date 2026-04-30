@@ -10,6 +10,9 @@ vi.mock('node:fs', async () => {
     readFileSync: vi.fn(),
   };
 });
+vi.mock('../../../src/search/reranker/onnx.js', () => ({
+  onnxRerank: vi.fn().mockResolvedValue([{ index: 0, score: 0.9 }]),
+}));
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -83,7 +86,7 @@ describe('doctor — package detected even when __version__ missing', () => {
     process.env.WIGOLO_DATA_DIR = '/tmp/wigolo';
   });
 
-  it('reports flashrank as installed when import succeeds but __version__ probe fails', async () => {
+  it('reports trafilatura as installed when import succeeds but __version__ probe fails', async () => {
     vi.mocked(existsSync).mockImplementation((p) => {
       const s = String(p);
       if (s.endsWith('state.json')) return true;
@@ -95,17 +98,15 @@ describe('doctor — package detected even when __version__ missing', () => {
     vi.mocked(spawnSync).mockImplementation((_cmd, args) => {
       const argList = (args ?? []) as string[];
       const script = argList.find((a) => a.includes('import')) ?? '';
-      // version probe (has __version__) — fail like real FlashRank
       if (script.includes('__version__')) {
         return { status: 1, stdout: '', stderr: 'AttributeError', signal: null, pid: 1, output: [], error: undefined } as ReturnType<typeof spawnSync>;
       }
-      // bare import succeeds
       return okProc('');
     });
 
     const code = await runDoctor('/tmp/wigolo');
 
-    expect(outBuffer).toMatch(/ML reranker:\s+installed/);
+    expect(outBuffer).toMatch(/Content extractor:\s+installed/);
     expect(code).toBe(0);
   });
 });
@@ -153,10 +154,10 @@ describe('doctor — package import uses venv python', () => {
     await runDoctor('/tmp/wigolo');
 
     const calls = vi.mocked(spawnSync).mock.calls;
-    const flashCall = calls.find((c) => {
+    const trafCall = calls.find((c) => {
       const args = (c[1] ?? []) as string[];
-      return args.some((a) => a.includes('flashrank'));
+      return args.some((a) => a.includes('trafilatura'));
     });
-    expect(flashCall?.[0]).toBe('python3');
+    expect(trafCall?.[0]).toBe('python3');
   });
 });

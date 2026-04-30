@@ -7,7 +7,7 @@ vi.mock('../../../../src/cli/tui/hooks/useVerify.js', () => ({
   useVerify: () => ({
     items: [
       { id: 'searxng', name: 'SearXNG', status: 'pass', detail: 'http://localhost:8888' },
-      { id: 'flashrank', name: 'FlashRank', status: 'pass', detail: 'installed' },
+      { id: 'reranker', name: 'ML reranker', status: 'pass', detail: 'installed' },
       { id: 'trafilatura', name: 'Trafilatura', status: 'pass', detail: 'installed' },
       { id: 'embeddings', name: 'Embeddings', status: 'pass', detail: '384-dim' },
     ],
@@ -34,7 +34,7 @@ describe('Verification', () => {
     );
     const frame = lastFrame()!;
     expect(frame).toContain('SearXNG');
-    expect(frame).toContain('FlashRank');
+    expect(frame).toContain('ML reranker');
     expect(frame).toContain('Trafilatura');
     expect(frame).toContain('Embeddings');
   });

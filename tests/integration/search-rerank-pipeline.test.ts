@@ -5,11 +5,9 @@ import type { SmartRouter } from '../../src/fetch/router.js';
 import { resetConfig } from '../../src/config.js';
 import { initDatabase, closeDatabase } from '../../src/cache/db.js';
 
-// Mock FlashRank subprocess to avoid requiring Python in CI
-vi.mock('../../src/search/flashrank.js', () => ({
-  isFlashRankAvailable: vi.fn().mockResolvedValue(true),
-  flashRankRerank: vi.fn(),
-  resetAvailabilityCache: vi.fn(),
+// Mock ONNX reranker so the test does not need real model assets
+vi.mock('../../src/search/reranker/onnx.js', () => ({
+  onnxRerank: vi.fn(),
 }));
 
 vi.mock('../../src/extraction/pipeline.js', () => ({
@@ -23,7 +21,7 @@ vi.mock('../../src/extraction/pipeline.js', () => ({
   }),
 }));
 
-import { flashRankRerank, isFlashRankAvailable } from '../../src/search/flashrank.js';
+import { onnxRerank } from '../../src/search/reranker/onnx.js';
 
 describe('integration: search + rerank pipeline', () => {
   const originalEnv = process.env;
@@ -51,11 +49,10 @@ describe('integration: search + rerank pipeline', () => {
   } as unknown as SmartRouter;
 
   beforeEach(() => {
-    process.env = { ...originalEnv, VALIDATE_LINKS: 'false', WIGOLO_RERANKER: 'flashrank', WIGOLO_RELEVANCE_THRESHOLD: '0' };
+    process.env = { ...originalEnv, VALIDATE_LINKS: 'false', WIGOLO_RERANKER: 'onnx', WIGOLO_RELEVANCE_THRESHOLD: '0' };
     resetConfig();
     initDatabase(':memory:');
     vi.clearAllMocks();
-    vi.mocked(isFlashRankAvailable).mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -64,8 +61,8 @@ describe('integration: search + rerank pipeline', () => {
     resetConfig();
   });
 
-  it('search results are reordered by FlashRank scores', async () => {
-    vi.mocked(flashRankRerank).mockResolvedValue([
+  it('search results are reordered by ONNX reranker scores', async () => {
+    vi.mocked(onnxRerank).mockResolvedValue([
       { index: 2, score: 0.98 },
       { index: 0, score: 0.85 },
       { index: 3, score: 0.60 },
@@ -85,7 +82,7 @@ describe('integration: search + rerank pipeline', () => {
     process.env.WIGOLO_RELEVANCE_THRESHOLD = '0.5';
     resetConfig();
 
-    vi.mocked(flashRankRerank).mockResolvedValue([
+    vi.mocked(onnxRerank).mockResolvedValue([
       { index: 0, score: 0.9 },
       { index: 1, score: 0.6 },
       { index: 2, score: 0.3 },
@@ -98,18 +95,8 @@ describe('integration: search + rerank pipeline', () => {
     expect(output.results.every(r => r.relevance_score >= 0.5)).toBe(true);
   });
 
-  it('gracefully falls through when FlashRank not available', async () => {
-    vi.mocked(isFlashRankAvailable).mockResolvedValue(false);
-
-    const input: SearchInput = { query: 'typescript tutorial', include_content: false };
-    const output = await handleSearch(input, [mockEngine], mockRouter);
-
-    expect(output.results.length).toBeGreaterThan(0);
-    expect(flashRankRerank).not.toHaveBeenCalled();
-  });
-
-  it('gracefully falls through when FlashRank subprocess returns null', async () => {
-    vi.mocked(flashRankRerank).mockResolvedValue(null);
+  it('gracefully falls through when ONNX reranker throws', async () => {
+    vi.mocked(onnxRerank).mockRejectedValue(new Error('model not available'));
 
     const input: SearchInput = { query: 'typescript tutorial', include_content: false };
     const output = await handleSearch(input, [mockEngine], mockRouter);

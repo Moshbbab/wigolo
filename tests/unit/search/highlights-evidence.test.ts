@@ -1,10 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { SearchResultItem } from '../../../src/types.js';
 
-vi.mock('../../../src/search/flashrank.js', () => ({
-  isFlashRankAvailable: vi.fn(async () => false),
-  flashRankRerank: vi.fn(),
+vi.mock('../../../src/search/reranker/onnx.js', () => ({
+  onnxRerank: vi.fn().mockRejectedValue(new Error('reranker disabled in test')),
 }));
+vi.mock('../../../src/config.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../../src/config.js')>();
+  return { ...actual, getConfig: () => ({ reranker: 'none', rerankerModel: 'bge-reranker-v2-m3' }) };
+});
 
 const { extractHighlights, fallbackHighlights } = await import(
   '../../../src/search/highlights.js'
@@ -32,7 +35,7 @@ describe('Highlight carries section_heading and source_span', () => {
     expect(hs[0].source_span!.end).toBeGreaterThan(hs[0].source_span!.start);
   });
 
-  it('extractHighlights (no flashrank) attaches section_heading and span', async () => {
+  it('extractHighlights (no reranker) attaches section_heading and span', async () => {
     const { highlights } = await extractHighlights('topic', results, 5);
     expect(highlights.length).toBeGreaterThan(0);
     expect(highlights[0].section_heading).toBe('Heading');

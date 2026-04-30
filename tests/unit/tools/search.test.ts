@@ -43,7 +43,7 @@ describe('handleSearch', () => {
 
   beforeEach(() => {
     // Pin reranker off for deterministic ordering — tests assert engine-provided
-    // order. Default is now 'flashrank' which reorders when the model is available.
+    // order. Default is now 'onnx' which reorders when the model is available.
     process.env = { ...originalEnv, VALIDATE_LINKS: 'false', WIGOLO_RERANKER: 'none' };
     resetConfig();
     initDatabase(':memory:');

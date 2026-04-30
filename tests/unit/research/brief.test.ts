@@ -1,10 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { ResearchSource } from '../../../src/types.js';
 
-vi.mock('../../../src/search/flashrank.js', () => ({
-  isFlashRankAvailable: vi.fn().mockResolvedValue(false),
-  flashRankRerank: vi.fn(),
+vi.mock('../../../src/search/reranker/onnx.js', () => ({
+  onnxRerank: vi.fn().mockRejectedValue(new Error('reranker disabled in test')),
 }));
+vi.mock('../../../src/config.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../../src/config.js')>();
+  return { ...actual, getConfig: () => ({ reranker: 'none', rerankerModel: 'bge-reranker-v2-m3' }) };
+});
 
 const { buildResearchBrief, detectCrossReferences } = await import('../../../src/research/brief.js');
 

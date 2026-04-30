@@ -4,6 +4,9 @@ import { join } from 'node:path';
 import { getBootstrapState, type BootstrapState } from '../searxng/bootstrap.js';
 import { isProcessAlive } from '../searxng/process.js';
 import { getPythonBin } from '../python-env.js';
+import { getConfig } from '../config.js';
+import { resolveModelId } from '../search/reranker/models.js';
+import { onnxRerank } from '../search/reranker/onnx.js';
 
 function out(line = ''): void { process.stderr.write(`${line}\n`); }
 
@@ -48,6 +51,38 @@ function checkPyPackage(name: string, pythonBin: string): { ok: boolean; version
   return { ok: true, version: version || undefined };
 }
 
+async function checkOnnxReranker(
+  dataDir: string,
+): Promise<{ installed: boolean; modelId?: string; rerankMs?: number; reason?: string }> {
+  let modelId: string;
+  try {
+    modelId = resolveModelId(getConfig().rerankerModel);
+  } catch (err) {
+    return { installed: false, reason: err instanceof Error ? err.message : 'unknown error' };
+  }
+  const dir = join(dataDir, 'models', modelId);
+  const required = ['model_quantized.onnx', 'tokenizer.json', 'tokenizer_config.json'];
+  const missing = required.filter((f) => !existsSync(join(dir, f)));
+  if (missing.length > 0) {
+    return { installed: false, modelId, reason: `missing: ${missing.join(', ')}` };
+  }
+  try {
+    const docs = [
+      { text: 'React Server Components render on the server.' },
+      { text: 'Next.js App Router uses RSC by default.' },
+      { text: 'Bananas are a popular fruit.' },
+      { text: 'TypeScript adds static types to JavaScript.' },
+      { text: 'The capital of France is Paris.' },
+    ];
+    const t0 = Date.now();
+    await onnxRerank('react server components', docs, { modelId });
+    const rerankMs = Date.now() - t0;
+    return { installed: true, modelId, rerankMs };
+  } catch (err) {
+    return { installed: false, modelId, reason: err instanceof Error ? err.message : 'rerank failed' };
+  }
+}
+
 function humanRetry(nextRetryAt?: string): string {
   if (!nextRetryAt) return 'not scheduled';
   const when = new Date(nextRetryAt);
@@ -87,10 +122,15 @@ export async function runDoctor(dataDir: string): Promise<number> {
   out('');
   const pythonBin = getPythonBin(dataDir);
   const traf = checkPyPackage('trafilatura', pythonBin);
-  const flash = checkPyPackage('flashrank', pythonBin);
+  const reranker = await checkOnnxReranker(dataDir);
   out('[wigolo doctor] Optional components:');
   out(`  Content extractor:  ${traf.ok ? `installed (trafilatura${traf.version ? ` v${traf.version}` : ''})` : 'not installed'}`);
-  out(`  ML reranker:        ${flash.ok ? `installed (flashrank${flash.version ? ` v${flash.version}` : ''})` : 'not installed'}`);
+  if (reranker.installed) {
+    const timing = reranker.rerankMs !== undefined ? ` — 5-doc rerank ${reranker.rerankMs}ms` : '';
+    out(`  ML reranker:        installed (onnx ${reranker.modelId})${timing}`);
+  } else {
+    out(`  ML reranker:        not installed${reranker.reason ? ` (${reranker.reason})` : ''}`);
+  }
 
   out('');
   const state = getBootstrapState(dataDir) as BootstrapState | null;

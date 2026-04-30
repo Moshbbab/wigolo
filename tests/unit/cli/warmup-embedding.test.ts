@@ -26,8 +26,15 @@ vi.mock('node:fs', () => ({
   chmodSync: vi.fn(),
 }));
 
-vi.mock('../../../src/search/flashrank.js', () => ({
-  resetAvailabilityCache: vi.fn(),
+vi.mock('../../../src/search/reranker/download.js', () => ({
+  downloadModelAssets: vi.fn().mockResolvedValue({
+    modelPath: '/tmp/model.onnx',
+    tokenizerPath: '/tmp/tokenizer.json',
+    configPath: '/tmp/tokenizer_config.json',
+  }),
+}));
+vi.mock('../../../src/search/reranker/onnx.js', () => ({
+  onnxRerank: vi.fn().mockResolvedValue([{ index: 0, score: 0.5 }]),
 }));
 
 import { runCommand } from '../../../src/cli/tui/run-command.js';

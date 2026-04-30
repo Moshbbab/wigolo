@@ -33,8 +33,8 @@ describe('integration: rerank in search pipeline', () => {
 
   beforeEach(() => {
     // These tests assert engine-provided scores pass through unchanged.
-    // The default reranker is now 'flashrank' which would rewrite scores when
-    // the FlashRank model is available, so opt out explicitly for passthrough.
+    // The default reranker is 'onnx' which would rewrite scores when
+    // the ONNX model is available, so opt out explicitly for passthrough.
     process.env = { ...originalEnv, VALIDATE_LINKS: 'false', WIGOLO_RERANKER: 'none' };
     resetConfig();
     initDatabase(':memory:');

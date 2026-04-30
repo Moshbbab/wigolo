@@ -38,7 +38,7 @@ export interface Config {
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   logFormat: 'json' | 'text';
   trafilatura: 'auto' | 'always' | 'never';
-  reranker: 'flashrank' | 'none' | 'custom';
+  reranker: 'onnx' | 'none' | 'custom';
   rerankerModel: string;
   relevanceThreshold: number;
   bootstrapMaxAttempts: number;
@@ -124,8 +124,18 @@ export function getConfig(): Config {
     logLevel: (envStr('LOG_LEVEL', 'info') as Config['logLevel']),
     logFormat: (envStr('LOG_FORMAT', 'json') as Config['logFormat']),
     trafilatura: (envStr('WIGOLO_TRAFILATURA', 'auto') as 'auto' | 'always' | 'never'),
-    reranker: (envStr('WIGOLO_RERANKER') ?? 'flashrank') as Config['reranker'],
-    rerankerModel: envStr('WIGOLO_RERANKER_MODEL') ?? 'ms-marco-MiniLM-L-12-v2',
+    reranker: (() => {
+      const raw = envStr('WIGOLO_RERANKER') ?? 'onnx';
+      if (raw === 'flashrank') {
+        throw new Error(
+          "WIGOLO_RERANKER='flashrank' is retired. Set WIGOLO_RERANKER=onnx (default) — " +
+          'the in-process ONNX reranker replaces the flashrank Python subprocess. ' +
+          'See CHANGELOG.md migration notes.',
+        );
+      }
+      return raw as Config['reranker'];
+    })(),
+    rerankerModel: envStr('WIGOLO_RERANKER_MODEL') ?? 'bge-reranker-v2-m3',
     relevanceThreshold: parseFloat(envStr('WIGOLO_RELEVANCE_THRESHOLD') ?? '0') || 0,
     bootstrapMaxAttempts: envInt('WIGOLO_BOOTSTRAP_MAX_ATTEMPTS', 3),
     bootstrapBackoffSeconds: envIntArray('WIGOLO_BOOTSTRAP_BACKOFF_SECONDS', [30, 3600, 86400]),

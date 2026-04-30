@@ -9,7 +9,7 @@ vi.mock('../../../../src/cli/tui/hooks/useInstall.js', () => ({
       { id: 'searxng', name: 'SearXNG', status: 'done', timeMs: 3200 },
       { id: 'playwright', name: 'Chromium', status: 'done', timeMs: 1100 },
       { id: 'trafilatura', name: 'Trafilatura', status: 'installing' },
-      { id: 'flashrank', name: 'FlashRank', status: 'waiting' },
+      { id: 'reranker', name: 'ML reranker', status: 'waiting' },
       { id: 'embeddings', name: 'Embeddings', status: 'waiting' },
       { id: 'lightpanda', name: 'Lightpanda', status: 'waiting' },
     ],
@@ -51,7 +51,7 @@ describe('InstallProgress', () => {
     const { lastFrame } = render(
       <InstallProgress browser="lightpanda" onComplete={() => {}} />,
     );
-    expect(lastFrame()).toContain('FlashRank');
+    expect(lastFrame()).toContain('ML reranker');
     expect(lastFrame()).toContain('waiting');
   });
 });

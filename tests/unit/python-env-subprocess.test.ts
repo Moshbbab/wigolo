@@ -105,22 +105,8 @@ describe('availability checks use getPythonBin', () => {
     expect(calls[0][0]).toBe(VENV_PYTHON);
   });
 
-  it('isFlashRankAvailable calls venv python when venv exists', async () => {
-    vi.mocked(existsSync).mockImplementation((p) => String(p) === VENV_PYTHON);
-    vi.mocked(execFile).mockImplementation(((cmd: any, args: any, opts: any, cb: any) => {
-      const callback = typeof opts === 'function' ? opts : cb;
-      if (callback) callback(null, { stdout: '', stderr: '' });
-      return {} as any;
-    }) as any);
-
-    const { isFlashRankAvailable, resetAvailabilityCache } = await import('../../src/search/flashrank.js');
-    resetAvailabilityCache();
-    await isFlashRankAvailable();
-
-    const calls = vi.mocked(execFile).mock.calls;
-    expect(calls.length).toBeGreaterThan(0);
-    expect(calls[0][0]).toBe(VENV_PYTHON);
-  });
+  // ONNX reranker runs in-process (onnxruntime-node) so no python subprocess
+  // is launched for it. The retired flashrank Python-bridge test was removed.
 });
 
 describe('EmbeddingSubprocess uses getPythonBin', () => {

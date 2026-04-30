@@ -58,18 +58,6 @@ describe('config', () => {
   });
 
   describe('reranker configuration', () => {
-    it('reads WIGOLO_RERANKER config', () => {
-      process.env.WIGOLO_RERANKER = 'flashrank';
-      resetConfig();
-      expect(getConfig().reranker).toBe('flashrank');
-    });
-
-    it('defaults WIGOLO_RERANKER to flashrank (graceful fallback when not installed)', () => {
-      delete process.env.WIGOLO_RERANKER;
-      resetConfig();
-      expect(getConfig().reranker).toBe('flashrank');
-    });
-
     it('respects explicit WIGOLO_RERANKER=none to disable reranking', () => {
       process.env.WIGOLO_RERANKER = 'none';
       resetConfig();
@@ -80,12 +68,6 @@ describe('config', () => {
       process.env.WIGOLO_RERANKER_MODEL = 'custom-model';
       resetConfig();
       expect(getConfig().rerankerModel).toBe('custom-model');
-    });
-
-    it('defaults WIGOLO_RERANKER_MODEL to ms-marco-MiniLM-L-12-v2', () => {
-      delete process.env.WIGOLO_RERANKER_MODEL;
-      resetConfig();
-      expect(getConfig().rerankerModel).toBe('ms-marco-MiniLM-L-12-v2');
     });
 
     it('reads WIGOLO_RELEVANCE_THRESHOLD config', () => {
@@ -420,6 +402,38 @@ describe('config', () => {
       process.env.WIGOLO_EMBEDDING_MAX_TEXT_LENGTH = 'abc';
       resetConfig();
       expect(getConfig().embeddingMaxTextLength).toBe(8000);
+    });
+  });
+
+  describe('reranker config rename (ticket #10)', () => {
+    it('default reranker is "onnx"', () => {
+      delete process.env.WIGOLO_RERANKER;
+      resetConfig();
+      expect(getConfig().reranker).toBe('onnx');
+    });
+
+    it('default rerankerModel is "bge-reranker-v2-m3"', () => {
+      delete process.env.WIGOLO_RERANKER_MODEL;
+      resetConfig();
+      expect(getConfig().rerankerModel).toBe('bge-reranker-v2-m3');
+    });
+
+    it('retired value "flashrank" rejects with migration message', () => {
+      process.env.WIGOLO_RERANKER = 'flashrank';
+      resetConfig();
+      expect(() => getConfig()).toThrow(/WIGOLO_RERANKER=.flashrank.*retired.*onnx/i);
+    });
+
+    it('"minilm-l12" alias is preserved verbatim (resolution at use-site)', () => {
+      process.env.WIGOLO_RERANKER_MODEL = 'minilm-l12';
+      resetConfig();
+      expect(getConfig().rerankerModel).toBe('minilm-l12');
+    });
+
+    it('reranker=none disables reranking', () => {
+      process.env.WIGOLO_RERANKER = 'none';
+      resetConfig();
+      expect(getConfig().reranker).toBe('none');
     });
   });
 });

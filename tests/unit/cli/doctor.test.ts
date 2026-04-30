@@ -10,6 +10,9 @@ vi.mock('node:fs', async () => {
     readFileSync: vi.fn(),
   };
 });
+vi.mock('../../../src/search/reranker/onnx.js', () => ({
+  onnxRerank: vi.fn().mockResolvedValue([{ index: 0, score: 0.9 }]),
+}));
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -70,7 +73,7 @@ describe('runDoctor', () => {
   it('exits 0 when only optional packages missing', async () => {
     vi.mocked(spawnSync).mockImplementation((cmd, args) => {
       const joined = [cmd, ...((args ?? []) as string[])].join(' ');
-      if (joined.includes('trafilatura') || joined.includes('flashrank')) return failProc();
+      if (joined.includes('trafilatura')) return failProc();
       return okProc('Python 3.12.4');
     });
     vi.mocked(existsSync).mockReturnValue(true);

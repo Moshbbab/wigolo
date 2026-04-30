@@ -44,7 +44,7 @@ describe('PlainReporter', () => {
 
   it('update() is a no-op for PlainReporter (no mid-task chatter)', () => {
     const lines = captureStderr(() => {
-      reporter.start('flash', 'Installing FlashRank');
+      reporter.start('flash', 'Installing ML reranker');
       reporter.update('flash', 'downloading weights');
     });
     expect(lines.filter(l => l.includes('downloading weights'))).toHaveLength(0);

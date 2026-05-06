@@ -5,6 +5,7 @@ import type { SmartRouter } from '../../../src/fetch/router.js';
 import { resetConfig } from '../../../src/config.js';
 import { initDatabase, closeDatabase } from '../../../src/cache/db.js';
 import { cacheSearchResults } from '../../../src/cache/store.js';
+import { expandIfSingle } from '../../../src/search/multi-query.js';
 
 vi.mock('../../../src/extraction/pipeline.js', () => ({
   extractContent: vi.fn().mockResolvedValue({
@@ -196,7 +197,7 @@ describe('handleSearch', () => {
 
     it('uses search cache when force_refresh is false/undefined', async () => {
       // Single strings are auto-expanded; cache key uses the expanded multi-query join
-      const expandedKey = 'test | test guide | test tutorial | test examples | test best practices';
+      const expandedKey = expandIfSingle('test').join(' | ');
       cacheSearchResults(expandedKey, [
         { title: 'Stale', url: 'https://cached.example/1', snippet: 'stale snippet', relevance_score: 0.9 },
       ], ['cached-engine']);

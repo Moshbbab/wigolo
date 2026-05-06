@@ -254,6 +254,8 @@ export async function handleSearch(
   }
 
   // --- Single-query path ---
+  // Reachable only via mode='cache' with a string input. default/stealth string inputs
+  // are converted to string[] by expandIfSingle above and handled by the multi-query path.
   const queryStr = input.query as string;
 
   const staleMaxSeconds = mode === 'cache' ? config.fastStaleMaxHours * 3600 : 0;

@@ -1,5 +1,19 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const { warnSpy } = vi.hoisted(() => ({ warnSpy: vi.fn() }));
+
+vi.mock('../../../src/logger.js', () => ({
+  createLogger: () => ({
+    warn: warnSpy,
+    info: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  }),
+}));
+
 import { resolveMode } from '../../../src/util/mode.js';
+
+beforeEach(() => warnSpy.mockClear());
 
 describe('resolveMode', () => {
   it('defaults to "default" when value is undefined', () => {
@@ -13,14 +27,16 @@ describe('resolveMode', () => {
   });
 
   it('aliases deprecated "fast" → "cache" with a warning', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     expect(resolveMode('fast')).toBe('cache');
-    warn.mockRestore();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/fast.*deprecated/));
   });
 
-  it('aliases deprecated "balanced" and "deep" → "default"', () => {
+  it('aliases deprecated "balanced" and "deep" → "default" with warnings', () => {
     expect(resolveMode('balanced')).toBe('default');
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/balanced.*deprecated/));
+    warnSpy.mockClear();
     expect(resolveMode('deep')).toBe('default');
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/deep.*deprecated/));
   });
 
   it('rejects unknown modes', () => {

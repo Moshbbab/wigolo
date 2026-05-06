@@ -61,23 +61,6 @@ describe('fetch mode=fast', () => {
     expect((out as any).stage).toBe('fetch');
   });
 
-  it('surfaces js_required when the router marks the raw result as a JS shell', async () => {
-    const router = {
-      fetch: vi.fn().mockResolvedValue({
-        url: 'https://spa.test/',
-        finalUrl: 'https://spa.test/',
-        html: '<div id="root"></div>',
-        contentType: 'text/html',
-        statusCode: 200,
-        method: 'http',
-        headers: {},
-        jsRequired: true,
-      }),
-    } as unknown as SmartRouter;
-    const out = await handleFetch({ url: 'https://spa.test/' }, router);
-    expect(out.js_required).toBe(true);
-  });
-
   it('serves stale cache (within 24h window) without calling router and marks stale=true', async () => {
     cacheContent(makeRaw('https://stale.test/'), makeExtraction());
     expireCacheRow();
@@ -112,5 +95,27 @@ describe('fetch mode=fast', () => {
     expect(router.fetch).toHaveBeenCalledTimes(1);
     expect(out.cached).toBe(false);
     expect(out.stale).toBeUndefined();
+  });
+});
+
+describe('fetch js_required handling', () => {
+  beforeEach(() => { initDatabase(':memory:'); resetConfig(); });
+  afterEach(() => { closeDatabase(); resetConfig(); });
+
+  it('surfaces js_required when the router marks the raw result as a JS shell', async () => {
+    const router = {
+      fetch: vi.fn().mockResolvedValue({
+        url: 'https://spa.test/',
+        finalUrl: 'https://spa.test/',
+        html: '<div id="root"></div>',
+        contentType: 'text/html',
+        statusCode: 200,
+        method: 'http',
+        headers: {},
+        jsRequired: true,
+      }),
+    } as unknown as SmartRouter;
+    const out = await handleFetch({ url: 'https://spa.test/' }, router);
+    expect(out.js_required).toBe(true);
   });
 });

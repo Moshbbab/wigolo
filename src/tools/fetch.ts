@@ -85,12 +85,7 @@ export async function handleFetch(
   const mode = resolveMode(input.mode);
   try {
     if (!input.force_refresh) {
-      let cached: CachedContent | null = null;
-      try {
-        cached = getCachedContent(input.url);
-      } catch (err) {
-        log.debug('cache lookup failed; treating as miss', { url: input.url, error: String(err) });
-      }
+      const cached = getCachedContent(input.url);
       if (cached && (!input.actions || input.actions.length === 0)) {
         const staleMaxSeconds = mode === 'cache' ? getConfig().fastStaleMaxHours * 3600 : 0;
         const { usable, stale } = isCacheUsable(cached, { staleMaxSeconds });

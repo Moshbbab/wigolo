@@ -1,7 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { handleFetch } from '../../src/tools/fetch.js';
+import { initDatabase, closeDatabase } from '../../src/cache/db.js';
 
 describe('handleFetch mode:cache', () => {
+  beforeEach(() => { initDatabase(':memory:'); });
+  afterEach(() => { closeDatabase(); });
+
   it('returns explicit cache_miss StageError when URL not cached', async () => {
     const url = 'https://example.com/never-cached-' + Date.now();
     const out = await handleFetch({ url, mode: 'cache' } as any, {} as any);

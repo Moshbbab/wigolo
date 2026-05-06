@@ -8,7 +8,7 @@ import { rerankResults } from '../search/rerank.js';
 import { applyAllFilters } from '../search/filters.js';
 import { formatSearchContext } from '../search/context-formatter.js';
 import type { SamplingCapableServer } from '../search/sampling.js';
-import { synthesizeAnswer, buildStructuredFallback } from '../search/answer-synthesis.js';
+import { synthesizeAnswer, buildStructuredFallback, runSynthesis } from '../search/answer-synthesis.js';
 import { extractHighlights } from '../search/highlights.js';
 import { applyEvidenceDefault } from '../search/evidence.js';
 import { normalizeQueries, fanOutSearch, synthesizeIntent, expandIfSingle } from '../search/multi-query.js';
@@ -139,8 +139,25 @@ export async function handleSearch(
       };
       const warning = backendStatus?.consumeWarning();
       if (warning) output.warning = warning;
-      if ((input.format === 'answer' || input.format === 'stream_answer') && output.results.length > 0) {
-        await applyAnswerSynthesis(input, output, output.results, maxTotalChars, samplingServer, streamProgress);
+      if (input.format === 'answer' || input.format === 'stream_answer') {
+        const synth = await runSynthesis({
+          query: displayQuery,
+          results: output.results,
+          samplingServer,
+          maxTotalChars,
+        });
+        if (!synth.ok) {
+          output.error = synth.error;
+          (output as unknown as Record<string, unknown>).error_reason = synth.error_reason;
+          (output as unknown as Record<string, unknown>).stage = synth.stage;
+          if (synth.hint) (output as unknown as Record<string, unknown>).hint = synth.hint;
+        } else {
+          output.answer = synth.data.answer;
+          output.citations = synth.data.citations;
+          if (synth.data.warning) {
+            output.warning = output.warning ? `${output.warning}; ${synth.data.warning}` : synth.data.warning;
+          }
+        }
       } else if (output.results.length > 0 && mode !== 'cache') {
         await applyEvidenceDefault(input, output, output.results, displayQuery);
       }
@@ -181,7 +198,7 @@ export async function handleSearch(
     const filterWarningsMq = filteredMq.warnings.join('; ');
     const filteredRaw = filteredMq.results;
 
-    if (filteredRaw.length === 0) {
+    if (filteredRaw.length === 0 && input.format !== 'answer' && input.format !== 'stream_answer') {
       const output: SearchOutput = {
         results: [],
         query: displayQuery,
@@ -254,8 +271,25 @@ export async function handleSearch(
     };
     const combinedMq = [filterWarningsMq, backendStatus?.consumeWarning()].filter(Boolean).join('; ');
     if (combinedMq) output.warning = combinedMq;
-    if ((input.format === 'answer' || input.format === 'stream_answer') && results.length > 0) {
-      await applyAnswerSynthesis(input, output, results, maxTotalChars, samplingServer, streamProgress);
+    if (input.format === 'answer' || input.format === 'stream_answer') {
+      const synth = await runSynthesis({
+        query: displayQuery,
+        results,
+        samplingServer,
+        maxTotalChars,
+      });
+      if (!synth.ok) {
+        output.error = synth.error;
+        (output as unknown as Record<string, unknown>).error_reason = synth.error_reason;
+        (output as unknown as Record<string, unknown>).stage = synth.stage;
+        if (synth.hint) (output as unknown as Record<string, unknown>).hint = synth.hint;
+      } else {
+        output.answer = synth.data.answer;
+        output.citations = synth.data.citations;
+        if (synth.data.warning) {
+          output.warning = output.warning ? `${output.warning}; ${synth.data.warning}` : synth.data.warning;
+        }
+      }
     } else if (results.length > 0 && mode !== 'cache') {
       await applyEvidenceDefault(input, output, results, displayQuery);
     }
@@ -290,8 +324,25 @@ export async function handleSearch(
     };
     const warning = backendStatus?.consumeWarning();
     if (warning) output.warning = warning;
-    if ((input.format === 'answer' || input.format === 'stream_answer') && output.results.length > 0) {
-      await applyAnswerSynthesis(input, output, output.results, maxTotalChars, samplingServer, streamProgress);
+    if (input.format === 'answer' || input.format === 'stream_answer') {
+      const synth = await runSynthesis({
+        query: queryStr,
+        results: output.results,
+        samplingServer,
+        maxTotalChars,
+      });
+      if (!synth.ok) {
+        output.error = synth.error;
+        (output as unknown as Record<string, unknown>).error_reason = synth.error_reason;
+        (output as unknown as Record<string, unknown>).stage = synth.stage;
+        if (synth.hint) (output as unknown as Record<string, unknown>).hint = synth.hint;
+      } else {
+        output.answer = synth.data.answer;
+        output.citations = synth.data.citations;
+        if (synth.data.warning) {
+          output.warning = output.warning ? `${output.warning}; ${synth.data.warning}` : synth.data.warning;
+        }
+      }
     } else if (output.results.length > 0 && mode !== 'cache') {
       await applyEvidenceDefault(input, output, output.results, queryStr);
     }
@@ -356,7 +407,7 @@ export async function handleSearch(
   const filterWarningsSq = filteredSq.warnings.join('; ');
   const filteredAllRaw = filteredSq.results;
 
-  if (filteredAllRaw.length === 0) {
+  if (filteredAllRaw.length === 0 && input.format !== 'answer' && input.format !== 'stream_answer') {
     const output: SearchOutput = {
       results: [],
       query: queryStr,
@@ -427,8 +478,25 @@ export async function handleSearch(
   };
   const combinedSq = [filterWarningsSq, backendStatus?.consumeWarning()].filter(Boolean).join('; ');
   if (combinedSq) output.warning = combinedSq;
-  if ((input.format === 'answer' || input.format === 'stream_answer') && results.length > 0) {
-    await applyAnswerSynthesis(input, output, results, maxTotalChars, samplingServer, streamProgress);
+  if (input.format === 'answer' || input.format === 'stream_answer') {
+    const synth = await runSynthesis({
+      query: queryStr,
+      results,
+      samplingServer,
+      maxTotalChars,
+    });
+    if (!synth.ok) {
+      output.error = synth.error;
+      (output as unknown as Record<string, unknown>).error_reason = synth.error_reason;
+      (output as unknown as Record<string, unknown>).stage = synth.stage;
+      if (synth.hint) (output as unknown as Record<string, unknown>).hint = synth.hint;
+    } else {
+      output.answer = synth.data.answer;
+      output.citations = synth.data.citations;
+      if (synth.data.warning) {
+        output.warning = output.warning ? `${output.warning}; ${synth.data.warning}` : synth.data.warning;
+      }
+    }
   } else if (results.length > 0 && mode !== 'cache') {
     await applyEvidenceDefault(input, output, results, queryStr);
   }

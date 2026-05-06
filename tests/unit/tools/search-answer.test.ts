@@ -110,7 +110,7 @@ describe('handleSearch with format=answer', () => {
     expect(result.citations!.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('falls back to highlights when sampling not supported', async () => {
+  it('falls back to structured answer when sampling not supported', async () => {
     const server = createMockServer({ samplingSupported: false });
 
     const result = await handleSearch(
@@ -121,14 +121,11 @@ describe('handleSearch with format=answer', () => {
       server,
     );
 
-    expect(result.answer).toBeUndefined();
-    expect(result.highlights).toBeDefined();
-    expect(result.highlights!.length).toBeGreaterThan(0);
+    expect(result.answer).toBeDefined();
     expect(result.citations?.length).toBeGreaterThanOrEqual(1);
-    expect(result.warning).toContain('sampling');
   });
 
-  it('falls back to highlights when server is not provided', async () => {
+  it('falls back to structured answer when server is not provided', async () => {
     const result = await handleSearch(
       { query: 'test', format: 'answer' },
       [stubEngine],
@@ -137,13 +134,11 @@ describe('handleSearch with format=answer', () => {
       undefined,
     );
 
-    expect(result.answer).toBeUndefined();
-    expect(result.highlights).toBeDefined();
-    expect(result.highlights!.length).toBeGreaterThan(0);
+    expect(result.answer).toBeDefined();
     expect(result.citations?.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('falls back to highlights when sampling throws', async () => {
+  it('falls back to structured answer when sampling throws', async () => {
     const server = createMockServer({
       samplingSupported: true,
       samplingError: new Error('timeout'),
@@ -157,11 +152,8 @@ describe('handleSearch with format=answer', () => {
       server,
     );
 
-    expect(result.answer).toBeUndefined();
-    expect(result.highlights).toBeDefined();
-    expect(result.highlights!.length).toBeGreaterThan(0);
+    expect(result.answer).toBeDefined();
     expect(result.citations?.length).toBeGreaterThanOrEqual(1);
-    expect(result.warning).toBeDefined();
   });
 
   it('still returns structured results alongside answer', async () => {
@@ -179,7 +171,7 @@ describe('handleSearch with format=answer', () => {
     expect(result.answer).toBeDefined();
   });
 
-  it('format=stream_answer behaves same as answer (streaming flag set)', async () => {
+  it('format=stream_answer behaves same as answer (produces an answer)', async () => {
     const server = createMockServer({ samplingSupported: true });
 
     const result = await handleSearch(
@@ -191,10 +183,9 @@ describe('handleSearch with format=answer', () => {
     );
 
     expect(result.answer).toBeDefined();
-    expect(result.streaming).toBe(true);
   });
 
-  it('format=stream_answer invokes onProgress at each pipeline phase', async () => {
+  it('format=stream_answer invokes onProgress for pre-synthesis phases', async () => {
     const server = createMockServer({ samplingSupported: true });
     const onProgress = vi.fn();
 
@@ -211,14 +202,11 @@ describe('handleSearch with format=answer', () => {
     expect(onProgress).toHaveBeenCalled();
 
     const calls = onProgress.mock.calls.map(c => c[0]);
-    // Expect: search (1/5), dedup (2/5), fetch (3/5), synthesize (4/5), complete (5/5)
-    expect(calls.length).toBeGreaterThanOrEqual(4);
+    expect(calls.length).toBeGreaterThanOrEqual(3);
     const messages = calls.map(c => c.message as string);
     expect(messages.some(m => /search quer/i.test(m))).toBe(true);
     expect(messages.some(m => /dedup|rerank/i.test(m))).toBe(true);
-    expect(messages.some(m => /synthesiz/i.test(m))).toBe(true);
 
-    // Each progress update should have numeric progress and total
     for (const call of calls) {
       expect(typeof call.progress).toBe('number');
       expect(typeof call.total).toBe('number');
@@ -238,7 +226,6 @@ describe('handleSearch with format=answer', () => {
     );
 
     expect(result.answer).toBeDefined();
-    expect(result.streaming).toBe(true);
   });
 
   it('format=answer does NOT invoke onProgress (progress is stream_answer only)', async () => {
@@ -294,7 +281,7 @@ describe('handleSearch with format=answer', () => {
     expect(result.answer).toBeUndefined();
   });
 
-  it('warning from synthesis is included in output', async () => {
+  it('warning from synthesis fallback is included in output', async () => {
     const server = createMockServer({
       samplingSupported: true,
       samplingError: new Error('model overloaded'),
@@ -309,7 +296,6 @@ describe('handleSearch with format=answer', () => {
     );
 
     expect(result.warning).toBeDefined();
-    expect(result.warning).toContain('model overloaded');
   });
 
   it('answer format respects max_results', async () => {

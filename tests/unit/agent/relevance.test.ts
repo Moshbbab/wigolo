@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isValidCandidateUrl, isBlocklistedDomain } from '../../../src/agent/relevance.js';
+import { isValidCandidateUrl, isBlocklistedDomain, preFilterCandidates } from '../../../src/agent/relevance.js';
 
 describe('isValidCandidateUrl', () => {
   it('rejects unparseable URLs', () => {
@@ -10,6 +10,9 @@ describe('isValidCandidateUrl', () => {
   });
   it('accepts ordinary http/https URLs', () => {
     expect(isValidCandidateUrl('https://example.com/a/b')).toBe(true);
+  });
+  it('rejects r.jina.ai URLs', () => {
+    expect(isValidCandidateUrl('https://r.jina.ai/https://example.com')).toBe(false);
   });
 });
 
@@ -25,5 +28,30 @@ describe('isBlocklistedDomain', () => {
   it('does not block reputable domains', () => {
     expect(isBlocklistedDomain('https://postgresql.org/docs')).toBe(false);
     expect(isBlocklistedDomain('https://stackoverflow.com/q/1')).toBe(false);
+  });
+  it('treats unparseable URLs as blocklisted (fail-closed)', () => {
+    expect(isBlocklistedDomain('not a url')).toBe(true);
+  });
+});
+
+describe('preFilterCandidates', () => {
+  it('partitions inputs by validity then blocklist, preserving extra fields and order', () => {
+    const items = [
+      { url: 'https://example.com/a', score: 1 },
+      { url: 'not a url', score: 2 },
+      { url: 'https://zhihu.com/q', score: 3 },
+      { url: 'https://example.com/b', score: 4 },
+      { url: 'https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com', score: 5 },
+    ];
+    const result = preFilterCandidates(items);
+    expect(result.kept).toEqual([
+      { url: 'https://example.com/a', score: 1 },
+      { url: 'https://example.com/b', score: 4 },
+    ]);
+    expect(result.excluded).toEqual([
+      { item: { url: 'not a url', score: 2 }, reason: 'invalid_url' },
+      { item: { url: 'https://zhihu.com/q', score: 3 }, reason: 'blocklisted_domain' },
+      { item: { url: 'https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com', score: 5 }, reason: 'invalid_url' },
+    ]);
   });
 });

@@ -7,7 +7,7 @@ import { getPythonBin } from '../python-env.js';
 import { getConfig } from '../config.js';
 import { resolveModelId } from '../search/reranker/models.js';
 import { onnxRerank } from '../search/reranker/onnx.js';
-import { allProviders, providerEnvVar } from '../extraction/llm/select.js';
+import { allProviders, providerEnvVar } from '../integrations/cloud/llm/select.js';
 
 function out(line = ''): void { process.stderr.write(`${line}\n`); }
 

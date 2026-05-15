@@ -186,7 +186,7 @@ export async function handleSearch(
     const filterTargetMq = (input.language ?? 'en').slice(0, 2).toLowerCase();
     const filteredMq = filterByLanguage(rawResults, {
       target: filterTargetMq,
-      dropThreshold: 0.4,
+      dropThreshold: 0.7,
     });
     const filterWarningsMq = filteredMq.warnings.join('; ');
     const filteredRaw = filteredMq.results;

@@ -1,17 +1,17 @@
 import { getConfig } from '../config.js';
-import { callAnthropic } from './llm/anthropic.js';
-import { callOpenAI } from './llm/openai.js';
-import { callGemini } from './llm/gemini.js';
-import { callGroq } from './llm/groq.js';
+import { callAnthropic } from '../integrations/cloud/llm/anthropic.js';
+import { callOpenAI } from '../integrations/cloud/llm/openai.js';
+import { callGemini } from '../integrations/cloud/llm/gemini.js';
+import { callGroq } from '../integrations/cloud/llm/groq.js';
 import {
   ensureLLMCacheTable,
   insertLLMCache,
   lookupLLMCache,
-} from './llm/cache.js';
-import { hashPrompt, hashSchema } from './llm/hash.js';
-import { allProviders, providerEnvVar, selectProvider } from './llm/select.js';
-import type { LLMExtractResult, LLMProvider } from './llm/types.js';
-import { validateAgainstSchema } from './llm/validate.js';
+} from '../integrations/cloud/llm/cache.js';
+import { hashPrompt, hashSchema } from '../integrations/cloud/llm/hash.js';
+import { allProviders, providerEnvVar, selectProvider } from '../integrations/cloud/llm/select.js';
+import type { LLMExtractResult, LLMProvider } from '../integrations/cloud/llm/types.js';
+import { validateAgainstSchema } from '../integrations/cloud/llm/validate.js';
 
 const MAX_HTML_BYTES = 50_000;
 

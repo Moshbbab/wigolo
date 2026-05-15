@@ -1,4 +1,4 @@
-import { getDatabase } from '../../cache/db.js';
+import { getDatabase } from '../../../cache/db.js';
 import type { LLMCallRecord } from './types.js';
 
 export function ensureLLMCacheTable(): void {

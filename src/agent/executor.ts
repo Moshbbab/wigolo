@@ -137,7 +137,13 @@ export async function executeAgentPlan(
   const allUrls = new Set<string>();
 
   try {
-    // Phase 1: Execute search queries
+    // Phase 1: Seed allUrls with explicit URLs first so they get top priority
+    // when budget.maxPages truncates the merged set.
+    for (const url of plan.urls) {
+      allUrls.add(url);
+    }
+
+    // Phase 2: Execute search queries
     if (plan.searches.length > 0) {
       const searchStart = Date.now();
       const searchResults = await executeSearches(plan.searches, engines, budget.deadlineMs);
@@ -151,11 +157,6 @@ export async function executeAgentPlan(
       for (const result of searchResults) {
         allUrls.add(result.url);
       }
-    }
-
-    // Phase 2: Add explicit URLs
-    for (const url of plan.urls) {
-      allUrls.add(url);
     }
 
     if (allUrls.size === 0) {

@@ -97,6 +97,28 @@ describe('executeAgentPlan', () => {
     expect(result.sources.filter((s) => s.fetched).length).toBeLessThanOrEqual(3);
   });
 
+  it('prioritizes explicit urls over search results when maxPages is tight', async () => {
+    const plan: AgentPlan = {
+      searches: ['unrelated query'],
+      urls: ['https://target.example/seed1', 'https://target.example/seed2'],
+      notes: '',
+      samplingUsed: false,
+    };
+    const engine = createStubEngine([
+      { title: 'Noise 1', url: 'https://noise.example/1', snippet: '', relevance_score: 0.9, engine: 'stub' },
+      { title: 'Noise 2', url: 'https://noise.example/2', snippet: '', relevance_score: 0.8, engine: 'stub' },
+      { title: 'Noise 3', url: 'https://noise.example/3', snippet: '', relevance_score: 0.7, engine: 'stub' },
+    ]);
+    const router = createStubRouter();
+
+    const result = await executeAgentPlan(plan, [engine], router, { maxPages: 2, deadlineMs: Date.now() + 60000 });
+
+    const fetchedUrls = result.sources.filter((s) => s.fetched).map((s) => s.url);
+    expect(fetchedUrls).toContain('https://target.example/seed1');
+    expect(fetchedUrls).toContain('https://target.example/seed2');
+    expect(fetchedUrls.every((u) => u.startsWith('https://target.example/'))).toBe(true);
+  });
+
   it('respects deadline and stops fetching', async () => {
     const plan: AgentPlan = { searches: ['slow query'], urls: ['https://example.com/slow1', 'https://example.com/slow2', 'https://example.com/slow3'], notes: '', samplingUsed: false };
     const slowRouter = {

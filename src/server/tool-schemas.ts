@@ -262,6 +262,18 @@ export const CACHE_TOOL_SCHEMA = {
         'Returns a list of URLs with changed/unchanged status and diff summaries. ' +
         'Use with query or url_pattern to scope which cached entries to check.',
     },
+    mode: {
+      type: 'string',
+      enum: ['fts', 'hybrid'],
+      description:
+        'Search strategy when query is provided. "fts" (default) runs keyword-only BM25 over the FTS5 index. ' +
+        '"hybrid" additionally runs semantic vector search and fuses both rankings with reciprocal rank fusion ' +
+        'for higher-recall lookups; falls back to FTS when the embedding index is empty or unavailable.',
+    },
+    limit: {
+      type: 'number',
+      description: 'Maximum number of results to return (default 20).',
+    },
   },
 };
 

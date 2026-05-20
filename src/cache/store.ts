@@ -169,6 +169,14 @@ export function getCachedContent(url: string): CachedContent | null {
   return row ? rowToCachedContent(row) : null;
 }
 
+export function getCachedContentByNormalizedUrl(normalizedUrl: string): CachedContent | null {
+  const db = getDatabase();
+  const row = db.prepare(
+    'SELECT * FROM url_cache WHERE normalized_url = ? LIMIT 1',
+  ).get(normalizedUrl) as DbRow | undefined;
+  return row ? rowToCachedContent(row) : null;
+}
+
 export function getHashForNormalizedUrl(normalizedUrl: string): string | null {
   const db = getDatabase();
   const row = db.prepare(
@@ -327,6 +335,26 @@ export function searchCacheFiltered(options: {
   const sql = `SELECT url_cache.* FROM ${fromClause} ${whereClause} ${orderClause} LIMIT 100`;
   const rows = db.prepare(sql).all(...params) as DbRow[];
   return rows.map(rowToCachedContent);
+}
+
+/**
+ * BM25-ranked FTS5 search across cached pages. Returns normalized URLs
+ * paired with their rank score. `rank` from FTS5 is negative (lower is
+ * better in sqlite ordering), so we flip the sign to surface a "higher is
+ * better" score for consumers (e.g. RRF input).
+ */
+export function ftsSearchRanked(query: string, limit: number): Array<{ url: string; score: number }> {
+  if (!query.trim() || limit <= 0) return [];
+  const db = getDatabase();
+  const rows = db.prepare(`
+    SELECT url_cache.normalized_url AS url, url_cache_fts.rank AS rank
+    FROM url_cache
+    JOIN url_cache_fts ON url_cache.id = url_cache_fts.rowid
+    WHERE url_cache_fts MATCH ?
+    ORDER BY url_cache_fts.rank
+    LIMIT ?
+  `).all(sanitizeFtsQuery(query), limit) as Array<{ url: string; rank: number }>;
+  return rows.map(r => ({ url: r.url, score: -r.rank }));
 }
 
 export function clearCacheEntries(options: {

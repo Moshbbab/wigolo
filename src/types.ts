@@ -456,6 +456,15 @@ export interface CacheInput {
   clear?: boolean;
   stats?: boolean;
   check_changes?: boolean;
+  /**
+   * Search strategy when `query` is provided:
+   *   - 'fts'    (default) keyword-only BM25 over FTS5
+   *   - 'hybrid' BM25 + semantic vector search fused with reciprocal rank fusion
+   * Hybrid mode requires the sqlite-vec extension and a populated embedding
+   * index; on miss it transparently falls back to 'fts'.
+   */
+  mode?: 'fts' | 'hybrid';
+  limit?: number;
 }
 
 export interface CacheResultItem {

@@ -53,7 +53,9 @@
     "bench:extraction": "tsx benchmarks/extraction/runner.ts",
     "bench:compare": "tsx --env-file-if-exists=.env benchmarks/extraction/compare.ts",
     "bench:search": "tsx benchmarks/search/runner.ts",
-    "bench:agent": "tsx benchmarks/agent/runner.ts"
+    "bench:agent": "tsx benchmarks/agent/runner.ts",
+    "bench:embedding": "tsx benchmarks/embedding/runner.ts",
+    "bench:embedding:quality": "RUN_FASTEMBED=1 tsx benchmarks/embedding/runner.ts"
   },
   "publishConfig": {
     "access": "public",

@@ -1,3 +1,31 @@
+// Reranker tokenizer equivalence golden test.
+//
+// STATUS: deferred / known-failing.
+//
+// This test landed alongside the Python reranker infrastructure (PythonWorker,
+// RerankSubprocess, reranker_server.py, corpus) but the production hot-path is
+// NOT wired to the new subprocess — onnxRerank() still uses @xenova/transformers
+// + onnxruntime-node. The reason: an investigation found that xenova-JS and the
+// canonical SentencePiece Unigram tokenizer diverge systematically on the same
+// tokenizer.json for the bge-reranker-v2-m3 model. xenova has at least three
+// known bugs relative to the canonical spec:
+//   1. Missing add_prefix_space → no leading metaspace ▁ on first segment.
+//   2. MetaspacePreTokenizer ignores split=true → whole text treated as one piece.
+//   3. UTF-16 surrogate-pair splitting → emoji become <unk>.
+// Python tokenizers (Rust) is correct per the tokenizer.json spec. Shipping the
+// Python path as-is would produce different scores than the current Node path.
+//
+// This test is gated by WIGOLO_RERANKER_TEST=1 and skips by default. When the
+// gate is enabled, it currently FAILS — that is intentional and is the merge
+// signal that wire-up cannot proceed without one of:
+//   (a) "xenova-compat" patching of tokenizer.json (matches 4/6 buckets; emoji
+//       and long-doc-truncation still diverge — see scratch investigation
+//       notes referenced in the original spec).
+//   (b) Acceptance of canonical Python output as the new baseline, with an
+//       end-to-end rerank-ordering measurement on a real corpus and a retune
+//       of WIGOLO_RELEVANCE_THRESHOLD as needed.
+// Track follow-up in the project issue tracker.
+
 import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';

@@ -1,8 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { ResearchSource } from '../../../src/types.js';
 
-vi.mock('../../../src/search/reranker/onnx.js', () => ({
-  onnxRerank: vi.fn().mockRejectedValue(new Error('reranker disabled in test')),
+vi.mock('../../../src/providers/rerank-provider.js', () => ({
+  getRerankProvider: vi.fn(async () => ({
+    modelId: 'mock',
+    rerank: vi.fn().mockRejectedValue(new Error('reranker disabled in test')),
+  })),
 }));
 vi.mock('../../../src/config.js', async (importActual) => {
   const actual = await importActual<typeof import('../../../src/config.js')>();
@@ -143,6 +146,32 @@ describe('buildResearchBrief', () => {
     const sources = [mkSource()];
     const brief = await buildResearchBrief('q', sources, [], 3000, 40000, 'concept');
     expect(brief.sections.comparison).toBeUndefined();
+  });
+
+  it('populates citation_graph when synthesisText is provided', async () => {
+    const sources = [
+      mkSource({ url: 'https://a.com', markdown_content: 'server components render efficiently on server' }),
+      mkSource({ url: 'https://b.com', markdown_content: 'streaming SSR flushes chunks progressively' }),
+    ];
+    const brief = await buildResearchBrief(
+      'q',
+      sources,
+      [],
+      3000,
+      40000,
+      'general',
+      [],
+      'Server components are fast [1]. Streaming is great [2].',
+    );
+    expect(brief.citation_graph).toBeDefined();
+    expect(brief.citation_graph!.length).toBeGreaterThan(0);
+    expect(brief.citation_graph![0].source_indices).toEqual([0]);
+    expect(brief.citation_graph![0].confidence).toBe('high');
+  });
+
+  it('omits citation_graph when synthesisText is empty', async () => {
+    const brief = await buildResearchBrief('q', [mkSource()], [], 3000, 40000, 'general', [], '');
+    expect(brief.citation_graph).toBeUndefined();
   });
 
   it('detects gaps when sub-queries have no source coverage', async () => {

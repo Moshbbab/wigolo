@@ -1,5 +1,5 @@
 import type { SearchResultItem, Citation, Highlight } from '../types.js';
-import { onnxRerank } from './reranker/onnx.js';
+import { getRerankProvider } from '../providers/rerank-provider.js';
 import { getConfig } from '../config.js';
 import { createLogger } from '../logger.js';
 import { parseHeadings, lineStartCharOffsets } from '../extraction/markdown.js';
@@ -105,9 +105,10 @@ export function mapPassageHeadings(
   });
 }
 
-// Score passages across all results and return the top N using the in-process
-// ONNX reranker, with a graceful first-paragraph fallback when reranking is
-// disabled or fails. Each Highlight carries a source_index suitable for citing.
+// Score passages across all results and return the top N using the
+// cross-encoder rerank provider, with a graceful first-paragraph fallback
+// when reranking is disabled or fails. Each Highlight carries a
+// source_index suitable for citing.
 export async function extractHighlights(
   query: string,
   results: SearchResultItem[],
@@ -152,15 +153,15 @@ export async function extractHighlights(
   const cfg = getConfig();
   if (cfg.reranker === 'onnx') {
     try {
-      const scored = await onnxRerank(
+      const provider = await getRerankProvider();
+      const scored = await provider.rerank(
         query,
-        candidates.map((c) => ({ text: c.text })),
-        { modelId: cfg.rerankerModel },
+        candidates.map((c, i) => ({ id: String(i), text: c.text })),
       );
       if (scored.length > 0) {
         const ranked = scored.slice(0, maxHighlights);
         const highlights = ranked.map<Highlight>((s) => {
-          const cand = candidates[s.index];
+          const cand = candidates[Number(s.id)];
           return {
             text: cand.text,
             source_index: cand.sourceIndex,
@@ -174,14 +175,14 @@ export async function extractHighlights(
         return { highlights, citations, reranker_used: true };
       }
     } catch (err) {
-      log.debug('onnx reranker failed, using fallback passages', { error: String(err) });
+      log.debug('rerank provider failed, using fallback passages', { error: String(err) });
     }
   }
 
   return { highlights: fallbackHighlights(results, maxHighlights), citations, reranker_used: false };
 }
 
-// Fallback when the ONNX reranker is unavailable: take the first substantive paragraph
+// Fallback when the cross-encoder reranker is unavailable: take the first substantive paragraph
 // from each source (ordered by engine relevance). Preserves citation indices
 // so host LLMs can still cite [N] correctly.
 export function fallbackHighlights(

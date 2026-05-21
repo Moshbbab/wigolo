@@ -20,14 +20,19 @@ vi.mock('../../../src/cache/change-detector.js', () => ({
   detectChange: vi.fn(),
 }));
 
-vi.mock('../../../src/extraction/pipeline.js', () => ({
-  extractContent: vi.fn(),
+const extractMock = vi.fn();
+vi.mock('../../../src/providers/extract-provider.js', () => ({
+  getExtractProvider: vi.fn(async () => ({
+    name: 'v1' as const,
+    extract: extractMock,
+  })),
+  _resetExtractProviderForTest: vi.fn(),
 }));
+
 
 import { handleCache } from '../../../src/tools/cache.js';
 import { searchCacheFiltered, getCacheStats, clearCacheEntries } from '../../../src/cache/store.js';
 import { detectChange } from '../../../src/cache/change-detector.js';
-import { extractContent } from '../../../src/extraction/pipeline.js';
 
 function mockRouter(html = '<html></html>', finalUrl?: string) {
   return {
@@ -183,7 +188,7 @@ describe('handleCache --- check_changes mode', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(detectChange).mockReturnValue({ changed: false });
-    vi.mocked(extractContent).mockResolvedValue({
+    extractMock.mockResolvedValue({
       title: 'Test',
       markdown: 'new content',
       metadata: {},
@@ -403,7 +408,7 @@ describe('handleCache --- check_changes mode', () => {
       },
     ]);
 
-    vi.mocked(extractContent).mockResolvedValue({
+    extractMock.mockResolvedValue({
       title: 'X',
       markdown: 'freshly fetched content',
       metadata: {},

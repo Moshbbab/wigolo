@@ -190,6 +190,17 @@ export const SEARCH_TOOL_SCHEMA = {
       enum: ['cache', 'default', 'stealth'],
       description: "cache=single-engine, no rerank, stale cache ok. default=standard multi-engine search. stealth=full browser for JS-heavy result pages.",
     },
+    agent_context: {
+      type: 'object',
+      description:
+        'Optional agent context for ranking + dedup. text is concatenated with the query before embedding; recent_urls are dropped from results.',
+      properties: {
+        text: { type: 'string', description: 'Surrounding code / prior turn / task framing.' },
+        recent_urls: { type: 'array', items: { type: 'string' }, description: 'URLs the agent has already seen.' },
+        intent: { type: 'string', description: 'One-line task framing. Used when text is omitted.' },
+      },
+      additionalProperties: false,
+    },
   },
   required: ['query'],
 };
@@ -262,6 +273,18 @@ export const CACHE_TOOL_SCHEMA = {
         'Returns a list of URLs with changed/unchanged status and diff summaries. ' +
         'Use with query or url_pattern to scope which cached entries to check.',
     },
+    mode: {
+      type: 'string',
+      enum: ['fts', 'hybrid'],
+      description:
+        'Search strategy when query is provided. "fts" (default) runs keyword-only BM25 over the FTS5 index. ' +
+        '"hybrid" additionally runs semantic vector search and fuses both rankings with reciprocal rank fusion ' +
+        'for higher-recall lookups; falls back to FTS when the embedding index is empty or unavailable.',
+    },
+    limit: {
+      type: 'number',
+      description: 'Maximum number of results to return (default 20).',
+    },
   },
 };
 
@@ -286,6 +309,11 @@ export const EXTRACT_TOOL_SCHEMA = {
     schema: {
       type: 'object',
       description: 'JSON Schema defining fields to extract. Field names are matched against page content via CSS classes, ARIA labels, microdata, and JSON-LD. Required when mode="schema".',
+    },
+    named_schema: {
+      type: 'string',
+      enum: ['Article', 'Recipe', 'Product', 'CodeSnippet', 'Paper', 'EventListing'],
+      description: 'Extract page data into a strict named schema (heuristic only; no LLM required). Mutually exclusive with `schema`.',
     },
   },
 };
@@ -322,6 +350,12 @@ export const FIND_SIMILAR_TOOL_SCHEMA = {
     include_web: {
       type: 'boolean',
       description: 'Supplement with web search if needed (default: true)',
+    },
+    mode: {
+      type: 'string',
+      enum: ['auto', 'cache', 'web-expansion', 'crawl-rank'],
+      default: 'auto',
+      description: "Retrieval strategy: cache (local hybrid), web-expansion (key terms + web search), crawl-rank (1-hop crawl from seed URL + embed + cosine rank), or auto.",
     },
     max_tokens_out: {
       type: 'number',

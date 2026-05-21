@@ -25,8 +25,32 @@ describe('parseCommand', () => {
     expect(parseCommand(['health'])).toEqual({ command: 'health', args: [] });
   });
 
-  it('treats unknown commands as mcp mode', () => {
-    expect(parseCommand(['unknown'])).toEqual({ command: 'mcp', args: [] });
+  it('routes unknown subcommand to "unknown" with name in args[0]', () => {
+    expect(parseCommand(['foobar'])).toEqual({ command: 'unknown', args: ['foobar'] });
+  });
+
+  it('returns "help" for --help', () => {
+    expect(parseCommand(['--help'])).toEqual({ command: 'help', args: [] });
+  });
+
+  it('returns "help" for -h', () => {
+    expect(parseCommand(['-h'])).toEqual({ command: 'help', args: [] });
+  });
+
+  it('returns "help" for help subcommand', () => {
+    expect(parseCommand(['help'])).toEqual({ command: 'help', args: [] });
+  });
+
+  it('returns "version" for --version', () => {
+    expect(parseCommand(['--version'])).toEqual({ command: 'version', args: [] });
+  });
+
+  it('returns "version" for -V', () => {
+    expect(parseCommand(['-V'])).toEqual({ command: 'version', args: [] });
+  });
+
+  it('returns "version" for version subcommand', () => {
+    expect(parseCommand(['version'])).toEqual({ command: 'version', args: [] });
   });
 
   it('returns "shell" for shell argument', () => {

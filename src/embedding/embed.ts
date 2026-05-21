@@ -1,54 +1,95 @@
-import { randomUUID } from 'node:crypto';
-import { EmbeddingSubprocess } from './subprocess.js';
-import { VectorIndex, type SimilarResult } from './vector-index.js';
-import { updateCacheEmbedding, getAllEmbeddings, normalizeUrl } from '../cache/store.js';
-import { getConfig } from '../config.js';
+import type { EmbedProvider } from '../providers/embed-provider.js';
+import {
+  getVectorStore,
+  type VectorStore,
+  type VectorRecord,
+} from '../providers/vector-store.js';
+import {
+  updateCacheEmbedding,
+  getAllEmbeddings,
+  normalizeUrl,
+} from '../cache/store.js';
+import { FastembedEmbedProvider } from './fastembed-provider.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('embedding');
 
-export class EmbeddingService {
-  private subprocess: EmbeddingSubprocess;
-  private index: VectorIndex;
-  private available = false;
-  private subprocessVerified = false;
+export interface SimilarResult {
+  url: string;
+  score: number;
+}
 
-  constructor() {
-    this.subprocess = new EmbeddingSubprocess();
-    this.index = new VectorIndex();
+/**
+ * Index shim exposed by `getIndex()` for callers that still need
+ * lightweight size/membership checks. Kept narrow so future stores can
+ * implement it without dragging in extra surface area.
+ */
+export interface IndexView {
+  size(): number;
+  has(url: string): boolean;
+}
+
+/**
+ * Embedding service backed by the native fastembed (ONNX) provider and
+ * the sqlite-vec VectorStore.
+ *
+ * Phase 5 replaced the in-memory VectorIndex with the sqlite-vec backed
+ * store accessed via getVectorStore(). The public surface (init /
+ * embedAndStore / embedAsync / findSimilar / getIndex / isAvailable /
+ * shutdown) is unchanged so callers in server.ts, tools/fetch.ts,
+ * research/pipeline.ts, search/find-similar.ts, and the legacy SearXNG
+ * orchestrator continue to work without modification.
+ */
+export class EmbeddingService {
+  private provider: EmbedProvider;
+  private store: VectorStore | null = null;
+  private knownUrls = new Set<string>();
+  private available = false;
+  private providerVerified = false;
+
+  constructor(provider?: EmbedProvider) {
+    this.provider = provider ?? new FastembedEmbedProvider();
   }
 
   async init(): Promise<void> {
     try {
-      const stored = getAllEmbeddings();
-      if (stored.length > 0) {
-        const entries = stored
-          .filter(e => e.embedding && e.dims > 0)
-          .map(e => ({
-            url: e.normalizedUrl,
-            embedding: e.embedding,
-            dims: e.dims,
-          }));
-        const loaded = this.index.loadFromBuffers(entries);
-        log.info('loaded embeddings into index', { count: loaded });
-      }
+      this.store = await getVectorStore();
 
-      // Probe the subprocess to verify Python + sentence-transformers work.
-      // This forces the lazy spawn so we know right away if embedding is broken.
+      // Migrate any embeddings persisted in url_cache (pre-Phase-5 layout)
+      // into the sqlite-vec backed store on first use. Skips on hit so
+      // re-init is cheap.
       try {
-        const probeId = 'init-probe';
-        await this.subprocess.embed(probeId, 'embedding service probe');
-        this.subprocessVerified = true;
-        log.info('embedding subprocess verified');
+        const existingSize = await this.store.size();
+        if (existingSize === 0) {
+          await this.migrateLegacyEmbeddings();
+        } else {
+          // Seed knownUrls from the store so embedAndStore can avoid
+          // unnecessary re-upserts when content has not changed.
+          // The current store has no list API, so we leave knownUrls empty
+          // and rely on upsert idempotency.
+        }
       } catch (err) {
-        log.warn('embedding subprocess probe failed — embeddings disabled', {
+        log.warn('embedding migration check failed', {
           error: err instanceof Error ? err.message : String(err),
         });
-        this.subprocessVerified = false;
+      }
+
+      // Probe the provider so we know up front whether ONNX init works.
+      try {
+        await this.provider.embed(['embedding service probe']);
+        this.providerVerified = true;
+        log.info('embedding provider verified', {
+          modelId: this.provider.modelId,
+          dim: this.provider.dim,
+        });
+      } catch (err) {
+        log.warn('embedding provider probe failed — embeddings disabled', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        this.providerVerified = false;
       }
 
       this.available = true;
-
     } catch (err) {
       log.error('EmbeddingService init failed', { error: String(err) });
       this.available = false;
@@ -63,13 +104,32 @@ export class EmbeddingService {
     this.available = value;
   }
 
+  /** Backwards-compat alias preserved for callers that gated on subprocess readiness. */
   isSubprocessReady(): boolean {
-    return this.subprocessVerified;
+    return this.providerVerified;
   }
 
-  getIndex(): VectorIndex {
-    return this.index;
+  /**
+   * Lightweight index view. Returns `size` from the backing VectorStore and
+   * `has` from a local URL-cache populated by embedAndStore. Callers that
+   * need richer access should consume the VectorStore directly via
+   * `getVectorStore()`.
+   */
+  getIndex(): IndexView {
+    const knownUrls = this.knownUrls;
+    const store = this.store;
+    return {
+      size: () => (store ? this.cachedSize : knownUrls.size),
+      has: (url: string) => knownUrls.has(url),
+    };
   }
+
+  /**
+   * Cached size from the store, refreshed after upserts. Reads from a
+   * VectorStore would be async; getIndex().size() callers expect a
+   * synchronous return so we maintain this counter.
+   */
+  private cachedSize = 0;
 
   async embedAndStore(url: string, markdown: string): Promise<void> {
     if (!this.available) {
@@ -78,18 +138,15 @@ export class EmbeddingService {
     }
 
     try {
-      const requestId = randomUUID();
-      const response = await this.subprocess.embed(requestId, markdown);
-
-      if (!response.vector || response.error) {
-        log.warn('embedding failed for URL', { url, error: response.error });
+      const [vector] = await this.provider.embed([markdown]);
+      if (!vector || vector.length === 0) {
+        log.warn('embedding returned empty vector', { url });
         return;
       }
 
-      const vector = new Float32Array(response.vector);
-      const buffer = Buffer.from(vector.buffer);
-      const model = this.subprocess.getModel() ?? getConfig().embeddingModel;
-      const dims = this.subprocess.getDims() ?? response.vector.length;
+      const buffer = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
+      const model = this.provider.modelId;
+      const dims = vector.length;
 
       let normalizedUrl: string;
       try {
@@ -99,7 +156,19 @@ export class EmbeddingService {
       }
 
       updateCacheEmbedding(normalizedUrl, buffer, model, dims);
-      this.index.add(normalizedUrl, vector);
+
+      if (this.store) {
+        const record: VectorRecord = {
+          id: normalizedUrl,
+          vector,
+          metadata: { url: normalizedUrl, contentHash: '', modelId: model },
+        };
+        await this.store.upsert([record]);
+        if (!this.knownUrls.has(normalizedUrl)) {
+          this.knownUrls.add(normalizedUrl);
+          this.cachedSize += 1;
+        }
+      }
 
       log.debug('embedded and stored', { url: normalizedUrl, dims });
     } catch (err) {
@@ -120,21 +189,39 @@ export class EmbeddingService {
     topK: number,
     excludeUrls?: Set<string>,
   ): Promise<SimilarResult[]> {
-    if (!this.available || this.index.size() === 0) {
+    if (!this.available || !this.store) {
       return [];
+    }
+    if (this.cachedSize === 0) {
+      // Refresh once before returning empty so newly-populated stores
+      // (e.g. legacy migration just finished) are visible to callers.
+      try {
+        this.cachedSize = await this.store.size();
+      } catch {
+        this.cachedSize = 0;
+      }
+      if (this.cachedSize === 0) return [];
     }
 
     try {
-      const requestId = randomUUID();
-      const response = await this.subprocess.embed(requestId, queryText);
-
-      if (!response.vector || response.error) {
-        log.warn('query embedding failed', { error: response.error });
+      const [queryVector] = await this.provider.embed([queryText]);
+      if (!queryVector || queryVector.length === 0) {
+        log.warn('query embedding failed: empty vector');
         return [];
       }
 
-      const queryVector = new Float32Array(response.vector);
-      return this.index.findSimilar(queryVector, topK, excludeUrls);
+      const overscan = excludeUrls && excludeUrls.size > 0
+        ? Math.max(topK + excludeUrls.size, topK * 2)
+        : topK;
+      const hits = await this.store.search(queryVector, overscan);
+
+      const results: SimilarResult[] = [];
+      for (const hit of hits) {
+        if (excludeUrls?.has(hit.id)) continue;
+        results.push({ url: hit.id, score: hit.score });
+        if (results.length >= topK) break;
+      }
+      return results;
     } catch (err) {
       log.warn('findSimilar failed', { error: String(err) });
       return [];
@@ -143,13 +230,61 @@ export class EmbeddingService {
 
   shutdown(): void {
     try {
-      this.subprocess.shutdown();
-      this.index.clear();
+      this.knownUrls.clear();
+      this.cachedSize = 0;
+      this.store = null;
       this.available = false;
+      this.providerVerified = false;
       log.info('EmbeddingService shut down');
     } catch (err) {
       log.error('EmbeddingService shutdown error', { error: String(err) });
     }
+  }
+
+  private async migrateLegacyEmbeddings(): Promise<void> {
+    if (!this.store) return;
+    const legacy = getAllEmbeddings(this.provider.modelId);
+    if (legacy.length === 0) {
+      this.cachedSize = 0;
+      return;
+    }
+
+    const records: VectorRecord[] = [];
+    for (const row of legacy) {
+      if (!row.embedding || row.dims <= 0) continue;
+      try {
+        const vector = new Float32Array(
+          row.embedding.buffer.slice(
+            row.embedding.byteOffset,
+            row.embedding.byteOffset + row.dims * Float32Array.BYTES_PER_ELEMENT,
+          ),
+        );
+        records.push({
+          id: row.normalizedUrl,
+          vector,
+          metadata: {
+            url: row.normalizedUrl,
+            contentHash: '',
+            modelId: row.model,
+          },
+        });
+        this.knownUrls.add(row.normalizedUrl);
+      } catch (err) {
+        log.warn('legacy embedding migration: failed to decode vector', {
+          url: row.normalizedUrl,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    if (records.length === 0) {
+      this.cachedSize = 0;
+      return;
+    }
+
+    log.info('migrating embeddings into sqlite-vec store', { count: records.length });
+    await this.store.upsert(records);
+    this.cachedSize = await this.store.size();
   }
 }
 

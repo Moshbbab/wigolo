@@ -4,16 +4,22 @@ import { resetConfig } from '../../src/config.js';
 import type { SmartRouter } from '../../src/fetch/router.js';
 import type { RawSearchResult } from '../../src/types.js';
 
-vi.mock('../../src/extraction/pipeline.js', () => ({
-  extractContent: vi.fn().mockResolvedValue({
-    title: 'Mock',
-    markdown: 'full body content paragraph',
-    metadata: {},
-    links: [],
-    images: [],
-    extractor: 'defuddle' as const,
-  }),
+const extractMock = vi.fn().mockResolvedValue({
+  title: 'Mock',
+  markdown: 'full body content paragraph',
+  metadata: {},
+  links: [],
+  images: [],
+  extractor: 'defuddle' as const,
+});
+vi.mock('../../src/providers/extract-provider.js', () => ({
+  getExtractProvider: vi.fn(async () => ({
+    name: 'v1' as const,
+    extract: extractMock,
+  })),
+  _resetExtractProviderForTest: vi.fn(),
 }));
+
 
 import { handleSearch } from '../../src/tools/search.js';
 import * as multiQueryMod from '../../src/search/multi-query.js';

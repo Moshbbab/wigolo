@@ -2,16 +2,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../../../src/fetch/router.js', () => ({}));
 
-vi.mock('../../../src/extraction/pipeline.js', () => ({
-  extractContent: vi.fn().mockResolvedValue({
-    title: 'Test',
-    markdown: 'Test content for embedding hook verification',
-    metadata: {},
-    links: [],
-    images: [],
-    extractor: 'defuddle' as const,
-  }),
+const extractMock = vi.fn().mockResolvedValue({
+  title: 'Test',
+  markdown: 'Test content for embedding hook verification',
+  metadata: {},
+  links: [],
+  images: [],
+  extractor: 'defuddle' as const,
+});
+vi.mock('../../../src/providers/extract-provider.js', () => ({
+  getExtractProvider: vi.fn(async () => ({
+    name: 'v1' as const,
+    extract: extractMock,
+  })),
+  _resetExtractProviderForTest: vi.fn(),
 }));
+
 
 vi.mock('../../../src/cache/store.js', () => ({
   getCachedContent: vi.fn().mockReturnValue(null),

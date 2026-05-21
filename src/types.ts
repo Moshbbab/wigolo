@@ -114,7 +114,7 @@ export interface ExtractionResult {
   extractor: ExtractorType;
 }
 
-export type ExtractorType = 'defuddle' | 'readability' | 'turndown' | 'site-specific' | 'trafilatura';
+export type ExtractorType = 'defuddle' | 'readability' | 'turndown' | 'site-specific';
 
 export type BrowserType = 'chromium' | 'firefox' | 'webkit' | 'lightpanda';
 
@@ -168,6 +168,19 @@ export interface SchemaExtractionResult {
 
 // --- Search layer types ---
 
+/**
+ * Optional agent-supplied context that the v1 search pipeline uses to refine
+ * ranking and dedup. All fields are advisory — the engine never requires them.
+ */
+export interface AgentContext {
+  /** Surrounding code, prior assistant turn, or task framing. */
+  text?: string;
+  /** URLs the agent has already seen recently; v1 dedups against these. */
+  recent_urls?: string[];
+  /** Optional one-line task framing — included in the embedded query if `text` empty. */
+  intent?: string;
+}
+
 export interface SearchInput {
   query: string | string[];
   max_results?: number;
@@ -192,6 +205,7 @@ export interface SearchInput {
   include_full_markdown?: boolean;
   citation_format?: CitationFormat;
   mode?: Mode;
+  agent_context?: AgentContext;
 }
 
 export interface SearchResultItem {
@@ -313,6 +327,12 @@ export interface CrossReference {
   confidence: 'high' | 'medium';
 }
 
+export interface CitationGraphEntry {
+  claim: string;
+  source_indices: number[];
+  confidence: 'high' | 'medium' | 'low';
+}
+
 export interface ResearchBrief {
   topics: string[];
   highlights: Highlight[];
@@ -331,6 +351,7 @@ export interface ResearchBrief {
     gaps: string[];
   };
   query_type: 'comparison' | 'how-to' | 'concept' | 'general';
+  citation_graph?: CitationGraphEntry[];
 }
 
 // --- Agent tool types (v3) ---
@@ -405,7 +426,7 @@ export interface CrawlInput {
   url: string;
   max_depth?: number;
   max_pages?: number;
-  strategy?: 'bfs' | 'dfs' | 'sitemap' | 'map';
+  strategy?: 'bfs' | 'dfs' | 'sitemap' | 'map' | 'auto';
   include_patterns?: string[];
   exclude_patterns?: string[];
   use_auth?: boolean;
@@ -456,6 +477,15 @@ export interface CacheInput {
   clear?: boolean;
   stats?: boolean;
   check_changes?: boolean;
+  /**
+   * Search strategy when `query` is provided:
+   *   - 'fts'    (default) keyword-only BM25 over FTS5
+   *   - 'hybrid' BM25 + semantic vector search fused with reciprocal rank fusion
+   * Hybrid mode requires the sqlite-vec extension and a populated embedding
+   * index; on miss it transparently falls back to 'fts'.
+   */
+  mode?: 'fts' | 'hybrid';
+  limit?: number;
 }
 
 export interface CacheResultItem {
@@ -491,6 +521,14 @@ export interface ChangeReport {
 
 // --- Extract tool types ---
 
+export type NamedSchemaType =
+  | 'Article'
+  | 'Recipe'
+  | 'Product'
+  | 'CodeSnippet'
+  | 'Paper'
+  | 'EventListing';
+
 export interface ExtractInput {
   url?: string;
   html?: string;
@@ -498,6 +536,7 @@ export interface ExtractInput {
   css_selector?: string;
   multiple?: boolean;
   schema?: JsonSchema;
+  named_schema?: NamedSchemaType;
   execution_mode?: Mode;
 }
 
@@ -578,6 +617,7 @@ export interface FindSimilarInput {
   exclude_domains?: string[];
   include_cache?: boolean;
   include_web?: boolean;
+  mode?: 'auto' | 'cache' | 'web-expansion' | 'crawl-rank';
   max_tokens_out?: number;
   include_full_markdown?: boolean;
   citation_format?: CitationFormat;

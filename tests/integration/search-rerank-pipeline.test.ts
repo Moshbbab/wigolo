@@ -4,24 +4,41 @@ import type { SearchInput, RawSearchResult, SearchEngine } from '../../src/types
 import type { SmartRouter } from '../../src/fetch/router.js';
 import { resetConfig } from '../../src/config.js';
 import { initDatabase, closeDatabase } from '../../src/cache/db.js';
+import type {
+  RerankProvider,
+  RerankCandidate,
+  RerankResult,
+} from '../../src/providers/rerank-provider.js';
 
-// Mock ONNX reranker so the test does not need real model assets
-vi.mock('../../src/search/reranker/onnx.js', () => ({
-  onnxRerank: vi.fn(),
+// Mock rerank provider so the test does not need real model assets
+const rerankMock = vi.fn();
+vi.mock('../../src/providers/rerank-provider.js', () => ({
+  getRerankProvider: vi.fn(async (): Promise<RerankProvider> => ({
+    modelId: 'mock',
+    rerank: rerankMock,
+  })),
 }));
 
-vi.mock('../../src/extraction/pipeline.js', () => ({
-  extractContent: vi.fn().mockResolvedValue({
-    title: 'Mock Title',
-    markdown: '# Mock Content',
-    metadata: {},
-    links: [],
-    images: [],
-    extractor: 'defuddle' as const,
-  }),
+const extractMock = vi.fn().mockResolvedValue({
+  title: 'Mock Title',
+  markdown: '# Mock Content',
+  metadata: {},
+  links: [],
+  images: [],
+  extractor: 'defuddle' as const,
+});
+vi.mock('../../src/providers/extract-provider.js', () => ({
+  getExtractProvider: vi.fn(async () => ({
+    name: 'v1' as const,
+    extract: extractMock,
+  })),
+  _resetExtractProviderForTest: vi.fn(),
 }));
 
-import { onnxRerank } from '../../src/search/reranker/onnx.js';
+
+// Helper: take ids in the order the provider returned them and map to scores.
+const byIds = (ids: number[], scores: number[]): RerankResult[] =>
+  ids.map((id, i) => ({ id: String(id), score: scores[i] }));
 
 describe('integration: search + rerank pipeline', () => {
   const originalEnv = process.env;
@@ -53,6 +70,7 @@ describe('integration: search + rerank pipeline', () => {
     resetConfig();
     initDatabase(':memory:');
     vi.clearAllMocks();
+    rerankMock.mockReset();
   });
 
   afterEach(() => {
@@ -61,52 +79,45 @@ describe('integration: search + rerank pipeline', () => {
     resetConfig();
   });
 
-  it('search results are reordered by ONNX reranker scores', async () => {
-    vi.mocked(onnxRerank).mockResolvedValue([
-      { index: 2, score: 0.98 },
-      { index: 0, score: 0.85 },
-      { index: 3, score: 0.60 },
-      { index: 1, score: 0.40 },
-    ]);
+  it('search results are reordered by rerank scores', async () => {
+    rerankMock.mockResolvedValue(byIds([2, 0, 3, 1], [0.98, 0.85, 0.6, 0.4]));
 
     const input: SearchInput = { query: 'typescript tutorial', include_content: false };
-    const __r_output = await handleSearch(input, [mockEngine], mockRouter);;
-    const output = __r_output.ok ? __r_output.data : ({ ...__r_output } as any);
+    const __r_output = await handleSearch(input, [mockEngine], mockRouter);
+    const output = __r_output.ok ? __r_output.data : ({ ...__r_output } as Record<string, unknown>);
 
-    expect(output.results.length).toBeGreaterThanOrEqual(3);
-    // Verify reranking changed the order from position-based
-    expect(output.results[0].title).toBe('TS Config Reference');
-    // Post-rerank score gets authority/consensus/recency boosts; assert ≥ ONNX score
-    expect(output.results[0].relevance_score).toBeGreaterThanOrEqual(0.98);
+    expect((output as { results: unknown[] }).results.length).toBeGreaterThanOrEqual(3);
+    expect((output as { results: { title: string }[] }).results[0].title).toBe('TS Config Reference');
+    expect((output as { results: { relevance_score: number }[] }).results[0].relevance_score).toBeGreaterThanOrEqual(0.98);
   });
 
   it('results below threshold are filtered out', async () => {
     process.env.WIGOLO_RELEVANCE_THRESHOLD = '0.5';
     resetConfig();
 
-    vi.mocked(onnxRerank).mockResolvedValue([
-      { index: 0, score: 0.9 },
-      { index: 1, score: 0.6 },
-      { index: 2, score: 0.3 },
-      { index: 3, score: 0.1 },
-    ]);
+    rerankMock.mockImplementation(async (_q: string, candidates: RerankCandidate[]) => {
+      const indices = candidates.map((c) => Number(c.id));
+      return indices.map((idx) => ({
+        id: String(idx),
+        score: [0.9, 0.6, 0.3, 0.1][idx],
+      }));
+    });
 
     const input: SearchInput = { query: 'typescript tutorial', include_content: false };
-    const __r_output = await handleSearch(input, [mockEngine], mockRouter);;
-    const output = __r_output.ok ? __r_output.data : ({ ...__r_output } as any);
+    const __r_output = await handleSearch(input, [mockEngine], mockRouter);
+    const output = __r_output.ok ? __r_output.data : ({ ...__r_output } as Record<string, unknown>);
 
-    expect(output.results.every(r => r.relevance_score >= 0.5)).toBe(true);
+    expect((output as { results: { relevance_score: number }[] }).results.every((r) => r.relevance_score >= 0.5)).toBe(true);
   });
 
-  it('gracefully falls through when ONNX reranker throws', async () => {
-    vi.mocked(onnxRerank).mockRejectedValue(new Error('model not available'));
+  it('gracefully falls through when rerank provider throws', async () => {
+    rerankMock.mockRejectedValue(new Error('model not available'));
 
     const input: SearchInput = { query: 'typescript tutorial', include_content: false };
-    const __r_output = await handleSearch(input, [mockEngine], mockRouter);;
-    const output = __r_output.ok ? __r_output.data : ({ ...__r_output } as any);
+    const __r_output = await handleSearch(input, [mockEngine], mockRouter);
+    const output = __r_output.ok ? __r_output.data : ({ ...__r_output } as Record<string, unknown>);
 
-    expect(output.results.length).toBeGreaterThan(0);
-    // Original position-based order preserved (raw 0.9 + boosts)
-    expect(output.results[0].relevance_score).toBeGreaterThanOrEqual(0.9);
+    expect((output as { results: unknown[] }).results.length).toBeGreaterThan(0);
+    expect((output as { results: { relevance_score: number }[] }).results[0].relevance_score).toBeGreaterThanOrEqual(0.9);
   });
 });

@@ -2,16 +2,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { SearchEngine, RawSearchResult, ResearchInput } from '../../../src/types.js';
 import type { SmartRouter } from '../../../src/fetch/router.js';
 
-vi.mock('../../../src/extraction/pipeline.js', () => ({
-  extractContent: vi.fn().mockResolvedValue({
-    title: 'Mock Title',
-    markdown: '# Mock Content\n\nExtracted content for research.',
-    metadata: {},
-    links: [],
-    images: [],
-    extractor: 'defuddle' as const,
-  }),
+const extractMock = vi.fn().mockResolvedValue({
+  title: 'Mock Title',
+  markdown: '# Mock Content\n\nExtracted content for research.',
+  metadata: {},
+  links: [],
+  images: [],
+  extractor: 'defuddle' as const,
+});
+vi.mock('../../../src/providers/extract-provider.js', () => ({
+  getExtractProvider: vi.fn(async () => ({
+    name: 'v1' as const,
+    extract: extractMock,
+  })),
+  _resetExtractProviderForTest: vi.fn(),
 }));
+
 
 vi.mock('../../../src/cache/store.js', () => ({
   cacheContent: vi.fn(),
@@ -217,14 +223,13 @@ describe('handleResearch', () => {
 
   describe('evidence shape', () => {
     it('default response includes evidence and strips source markdown_content', async () => {
-      const { extractContent } = await import('../../../src/extraction/pipeline.js');
       const longMd =
         '# Research Topic\n\n' +
         'TypeScript is a strongly typed programming language built on JavaScript. ' +
         'It compiles to plain JavaScript and runs anywhere JavaScript runs. The ' +
         'language adds optional static typing on top of dynamic JavaScript.\n\n' +
         'TypeScript supports many useful features for large applications.';
-      vi.mocked(extractContent).mockResolvedValue({
+      extractMock.mockResolvedValue({
         title: 'Research Source',
         markdown: longMd,
         metadata: {},
@@ -249,12 +254,11 @@ describe('handleResearch', () => {
     });
 
     it('include_full_markdown=true preserves source markdown_content', async () => {
-      const { extractContent } = await import('../../../src/extraction/pipeline.js');
       const longMd =
         '# Research Topic\n\n' +
         'TypeScript is a strongly typed programming language. It builds on JavaScript ' +
         'with optional static types and excellent tooling for large codebases.';
-      vi.mocked(extractContent).mockResolvedValue({
+      extractMock.mockResolvedValue({
         title: 'Research Source',
         markdown: longMd,
         metadata: {},

@@ -4,16 +4,22 @@ import type { SmartRouter } from '../../../src/fetch/router.js';
 import { resetConfig } from '../../../src/config.js';
 import { initDatabase, closeDatabase } from '../../../src/cache/db.js';
 
-vi.mock('../../../src/extraction/pipeline.js', () => ({
-  extractContent: vi.fn().mockResolvedValue({
-    title: 'Mock',
-    markdown: '# Mock\n\nContent.',
-    metadata: {},
-    links: [],
-    images: [],
-    extractor: 'defuddle' as const,
-  }),
+const extractMock = vi.fn().mockResolvedValue({
+  title: 'Mock',
+  markdown: '# Mock\n\nContent.',
+  metadata: {},
+  links: [],
+  images: [],
+  extractor: 'defuddle' as const,
+});
+vi.mock('../../../src/providers/extract-provider.js', () => ({
+  getExtractProvider: vi.fn(async () => ({
+    name: 'v1' as const,
+    extract: extractMock,
+  })),
+  _resetExtractProviderForTest: vi.fn(),
 }));
+
 
 const { handleSearch } = await import('../../../src/tools/search.js');
 
@@ -111,8 +117,7 @@ describe('handleSearch timing metadata', () => {
       }),
     } as unknown as SmartRouter;
 
-    const { extractContent } = await import('../../../src/extraction/pipeline.js');
-    vi.mocked(extractContent).mockImplementation(async (_html: any, url: string) => ({
+    extractMock.mockImplementation(async (_html: any, url: string) => ({
       title: url, markdown: 'x'.repeat(20000), metadata: {}, links: [], images: [],
       extractor: 'defuddle' as const,
     } as any));

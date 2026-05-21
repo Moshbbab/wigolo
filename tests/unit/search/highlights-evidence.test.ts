@@ -1,8 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { SearchResultItem } from '../../../src/types.js';
 
-vi.mock('../../../src/search/reranker/onnx.js', () => ({
-  onnxRerank: vi.fn().mockRejectedValue(new Error('reranker disabled in test')),
+vi.mock('../../../src/providers/rerank-provider.js', () => ({
+  getRerankProvider: vi.fn(async () => ({
+    modelId: 'mock',
+    rerank: vi.fn().mockRejectedValue(new Error('reranker disabled in test')),
+  })),
 }));
 vi.mock('../../../src/config.js', async (importActual) => {
   const actual = await importActual<typeof import('../../../src/config.js')>();

@@ -1,17 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { rerankResults } from '../../../src/search/rerank.js';
 import type { MergedSearchResult } from '../../../src/search/dedup.js';
+import type { RerankProvider } from '../../../src/providers/rerank-provider.js';
 
-vi.mock('../../../src/search/reranker/onnx.js', () => ({
-  onnxRerank: vi.fn(),
+const rerankMock = vi.fn();
+vi.mock('../../../src/providers/rerank-provider.js', () => ({
+  getRerankProvider: vi.fn(async (): Promise<RerankProvider> => ({
+    modelId: 'mock',
+    rerank: rerankMock,
+  })),
 }));
 vi.mock('../../../src/config.js', () => ({ getConfig: vi.fn() }));
 vi.mock('../../../src/logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-import { onnxRerank } from '../../../src/search/reranker/onnx.js';
 import { getConfig } from '../../../src/config.js';
+import type { Config } from '../../../src/config.js';
 
 function isoDaysAgo(days: number): string {
   const d = new Date();
@@ -29,10 +34,14 @@ function makeResult(title: string, score: number, publishedDays?: number): Merge
   };
 }
 
+const cfg = (over: Partial<Config>): Config =>
+  ({ reranker: 'none', relevanceThreshold: 0, ...over }) as Config;
+
 describe('rerankResults recency boost (intent-gated)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getConfig).mockReturnValue({ reranker: 'none', relevanceThreshold: 0 } as any);
+    rerankMock.mockReset();
+    vi.mocked(getConfig).mockReturnValue(cfg({}));
   });
 
   it('boosts <7d by 1.5× when query has recency intent', async () => {
@@ -64,13 +73,13 @@ describe('rerankResults recency boost (intent-gated)', () => {
     expect(out[0].relevance_score).toBe(0.5);
   });
   it('boost applies AFTER cross-encoder scoring', async () => {
-    vi.mocked(getConfig).mockReturnValue({ reranker: 'onnx', relevanceThreshold: 0 } as any);
-    vi.mocked(onnxRerank).mockResolvedValue([{ index: 0, score: 0.8 }]);
+    vi.mocked(getConfig).mockReturnValue(cfg({ reranker: 'onnx' }));
+    rerankMock.mockResolvedValue([{ id: '0', score: 0.8 }]);
     const out = await rerankResults('latest pgEdge', [makeResult('Fresh', 0.1, 3)]);
     expect(out[0].relevance_score).toBeCloseTo(0.8 * 1.5, 5);
   });
   it('boost applies BEFORE threshold filter', async () => {
-    vi.mocked(getConfig).mockReturnValue({ reranker: 'none', relevanceThreshold: 0.7 } as any);
+    vi.mocked(getConfig).mockReturnValue(cfg({ relevanceThreshold: 0.7 }));
     const out = await rerankResults('latest pgEdge', [makeResult('Fresh', 0.5, 3)]);
     expect(out).toHaveLength(1);
     expect(out[0].relevance_score).toBeCloseTo(0.75, 5);

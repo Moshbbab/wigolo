@@ -1,14 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { SearchResultItem } from '../../../src/types.js';
+import type {
+  RerankProvider,
+  RerankCandidate,
+  RerankResult,
+} from '../../../src/providers/rerank-provider.js';
 
-vi.mock('../../../src/search/reranker/onnx.js', () => ({
-  onnxRerank: vi.fn(),
+const rerankMock = vi.fn();
+vi.mock('../../../src/providers/rerank-provider.js', () => ({
+  getRerankProvider: vi.fn(async (): Promise<RerankProvider> => ({
+    modelId: 'mock',
+    rerank: rerankMock,
+  })),
 }));
 vi.mock('../../../src/config.js', () => ({
   getConfig: vi.fn(() => ({ reranker: 'onnx', rerankerModel: 'bge-reranker-v2-m3' })),
 }));
 
-const { onnxRerank } = await import('../../../src/search/reranker/onnx.js');
 const { getConfig } = await import('../../../src/config.js');
 const { extractHighlights, fallbackHighlights, splitIntoPassages } = await import(
   '../../../src/search/highlights.js'
@@ -98,12 +106,16 @@ describe('fallbackHighlights', () => {
 describe('extractHighlights', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getConfig).mockReturnValue({ reranker: 'onnx', rerankerModel: 'bge-reranker-v2-m3' } as any);
+    rerankMock.mockReset();
+    vi.mocked(getConfig).mockReturnValue({
+      reranker: 'onnx',
+      rerankerModel: 'bge-reranker-v2-m3',
+    } as ReturnType<typeof getConfig>);
   });
 
-  it('uses ONNX reranker when configured and sorts passages by score', async () => {
-    vi.mocked(onnxRerank).mockImplementation(async (_q, passages) =>
-      passages.map((_p, idx) => ({ index: idx, score: 1 / (idx + 1) })),
+  it('uses rerank provider when configured and sorts passages by score', async () => {
+    rerankMock.mockImplementation(async (_q: string, candidates: RerankCandidate[]) =>
+      candidates.map<RerankResult>((c, idx) => ({ id: c.id, score: 1 / (idx + 1) })),
     );
 
     const out = await extractHighlights('server components', results, 3);
@@ -122,7 +134,10 @@ describe('extractHighlights', () => {
   });
 
   it('falls back when reranker is disabled', async () => {
-    vi.mocked(getConfig).mockReturnValue({ reranker: 'none', rerankerModel: 'bge-reranker-v2-m3' } as any);
+    vi.mocked(getConfig).mockReturnValue({
+      reranker: 'none',
+      rerankerModel: 'bge-reranker-v2-m3',
+    } as ReturnType<typeof getConfig>);
 
     const out = await extractHighlights('server components', results, 5);
 
@@ -131,8 +146,8 @@ describe('extractHighlights', () => {
     expect(out.citations).toHaveLength(2);
   });
 
-  it('falls back when ONNX rerank throws', async () => {
-    vi.mocked(onnxRerank).mockRejectedValue(new Error('boom'));
+  it('falls back when rerank provider throws', async () => {
+    rerankMock.mockRejectedValue(new Error('boom'));
 
     const out = await extractHighlights('x', results, 5);
     expect(out.reranker_used).toBe(false);
@@ -149,7 +164,10 @@ describe('extractHighlights', () => {
   });
 
   it('source_index maps back to citations correctly', async () => {
-    vi.mocked(getConfig).mockReturnValue({ reranker: 'none', rerankerModel: 'bge-reranker-v2-m3' } as any);
+    vi.mocked(getConfig).mockReturnValue({
+      reranker: 'none',
+      rerankerModel: 'bge-reranker-v2-m3',
+    } as ReturnType<typeof getConfig>);
     const out = await extractHighlights('q', results, 10);
     for (const h of out.highlights) {
       const citation = out.citations.find((c) => c.index === h.source_index);

@@ -1,6 +1,7 @@
 import type { ResearchBrief, ResearchSource, SearchResultItem, CrossReference } from '../types.js';
 import type { QueryType } from './decompose.js';
 import { extractHighlights } from '../search/highlights.js';
+import { buildCitationGraph } from './citation-graph.js';
 
 const MAX_HIGHLIGHTS = 12;
 const MAX_KEY_FINDING_LEN = 280;
@@ -19,6 +20,7 @@ export async function buildResearchBrief(
   totalSourcesCharCap: number,
   queryType: QueryType = 'general',
   comparisonEntities: string[] = [],
+  synthesisText?: string,
 ): Promise<ResearchBrief> {
   const fetched = sources.filter((s) => s.fetched && s.markdown_content.length > 0);
 
@@ -43,6 +45,13 @@ export async function buildResearchBrief(
     ? buildComparisonSection(comparisonEntities, fetched)
     : undefined;
 
+  const citationGraph = synthesisText && synthesisText.trim().length > 0 && fetched.length > 0
+    ? buildCitationGraph(
+        synthesisText,
+        fetched.map((s) => ({ url: s.url, title: s.title, markdown: s.markdown_content })),
+      )
+    : undefined;
+
   return {
     topics,
     highlights,
@@ -58,6 +67,7 @@ export async function buildResearchBrief(
       gaps,
     },
     query_type: queryType,
+    ...(citationGraph && citationGraph.length > 0 ? { citation_graph: citationGraph } : {}),
   };
 }
 

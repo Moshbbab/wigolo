@@ -1,20 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { WIGOLO_INSTRUCTIONS, TOOL_DESCRIPTIONS } from '../../../src/instructions.js';
+import {
+  WIGOLO_INSTRUCTIONS,
+  WIGOLO_INSTRUCTIONS_FULL,
+  TOOL_DESCRIPTIONS,
+} from '../../../src/instructions.js';
 
 function wordCount(s: string): number {
   return s.trim().split(/\s+/).filter(Boolean).length;
 }
 
-describe('WIGOLO_INSTRUCTIONS (Layer 1 — server strategy)', () => {
+describe('WIGOLO_INSTRUCTIONS (Layer 1 — per-session strategy)', () => {
   it('is a non-empty string', () => {
     expect(typeof WIGOLO_INSTRUCTIONS).toBe('string');
     expect(WIGOLO_INSTRUCTIONS.trim().length).toBeGreaterThan(0);
   });
 
-  it('is within 300–1000 words so clients do not truncate it', () => {
+  it('is within 150–500 words so it stays cheap to inject every session', () => {
     const count = wordCount(WIGOLO_INSTRUCTIONS);
-    expect(count).toBeGreaterThanOrEqual(300);
-    expect(count).toBeLessThanOrEqual(1000);
+    expect(count).toBeGreaterThanOrEqual(150);
+    expect(count).toBeLessThanOrEqual(500);
   });
 
   it('mentions every tool by name at least once (tool selection guidance)', () => {
@@ -24,7 +28,7 @@ describe('WIGOLO_INSTRUCTIONS (Layer 1 — server strategy)', () => {
   });
 
   it('teaches the cache-first workflow', () => {
-    expect(WIGOLO_INSTRUCTIONS.toLowerCase()).toMatch(/check .*cache|cache.*first|before.*search/);
+    expect(WIGOLO_INSTRUCTIONS.toLowerCase()).toMatch(/check .*cache|cache.*first|before.*(search|going to the network)/);
   });
 
   it('teaches sitemap strategy for documentation sites', () => {
@@ -37,14 +41,6 @@ describe('WIGOLO_INSTRUCTIONS (Layer 1 — server strategy)', () => {
 
   it('teaches the schema mode for structured extraction', () => {
     expect(WIGOLO_INSTRUCTIONS).toMatch(/schema/);
-  });
-
-  it('surfaces the less-obvious localhost capability', () => {
-    expect(WIGOLO_INSTRUCTIONS.toLowerCase()).toContain('localhost');
-  });
-
-  it('surfaces the less-obvious use_auth capability', () => {
-    expect(WIGOLO_INSTRUCTIONS).toContain('use_auth');
   });
 
   it('does not use marketing filler', () => {
@@ -61,6 +57,20 @@ describe('WIGOLO_INSTRUCTIONS (Layer 1 — server strategy)', () => {
     // Parameter descriptions live on the JSON schema / tool descriptions, not here.
     // Heuristic: Layer 1 should not read like a field list — no "Key parameters:" header.
     expect(WIGOLO_INSTRUCTIONS).not.toMatch(/^\s*Key parameters:/m);
+  });
+
+  it('points readers to the wigolo://docs/usage resource for the long guide', () => {
+    expect(WIGOLO_INSTRUCTIONS).toContain('wigolo://docs/usage');
+  });
+});
+
+describe('WIGOLO_INSTRUCTIONS_FULL (resource long form)', () => {
+  it('surfaces the less-obvious localhost capability', () => {
+    expect(WIGOLO_INSTRUCTIONS_FULL.toLowerCase()).toContain('localhost');
+  });
+
+  it('surfaces the less-obvious use_auth capability', () => {
+    expect(WIGOLO_INSTRUCTIONS_FULL).toContain('use_auth');
   });
 });
 

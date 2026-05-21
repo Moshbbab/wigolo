@@ -25,17 +25,22 @@ vi.mock('../../../src/searxng/bootstrap.js', () => ({
   getBootstrapState: vi.fn().mockReturnValue(null),
 }));
 
-vi.mock('../../../src/search/reranker/download.js', () => ({
-  downloadModelAssets: vi.fn().mockResolvedValue({
-    modelPath: '/tmp/model.onnx',
-    tokenizerPath: '/tmp/tokenizer.json',
-    configPath: '/tmp/tokenizer_config.json',
-  }),
+vi.mock('../../../src/providers/rerank-provider.js', () => ({
+  getRerankProvider: vi.fn(async () => ({
+    modelId: 'Xenova/ms-marco-MiniLM-L-6-v2',
+    rerank: vi.fn().mockResolvedValue([{ id: '0', score: 0.5 }]),
+  })),
 }));
 
-vi.mock('../../../src/search/reranker/onnx.js', () => ({
-  onnxRerank: vi.fn().mockResolvedValue([{ index: 0, score: 0.5 }]),
-}));
+vi.mock('../../../src/embedding/fastembed-provider.js', () => {
+  const FastembedEmbedProvider = vi.fn(function (this: Record<string, unknown>) {
+    this.modelId = 'BGE-small-en-v1.5';
+    this.dim = 384;
+    this.warmup = vi.fn().mockResolvedValue(undefined);
+    this.embed = vi.fn().mockResolvedValue([new Float32Array(384).fill(0.1)]);
+  });
+  return { FastembedEmbedProvider };
+});
 
 import { runCommand } from '../../../src/cli/tui/run-command.js';
 import { runWarmup } from '../../../src/cli/warmup.js';
@@ -44,8 +49,6 @@ const ok = { code: 0, stdout: '', stderr: '', timedOut: false };
 const failWith = (msg: string) => ({ code: 1, stdout: '', stderr: msg, timedOut: false });
 
 const argsOf = (call: unknown[]): string[] => (call[1] as string[]) ?? [];
-const includesArg = (call: unknown[], needle: string): boolean =>
-  argsOf(call).some((a) => String(a).includes(needle));
 const hasFirefoxInstall = (call: unknown[]): boolean => {
   const args = argsOf(call);
   return args.includes('firefox') && args.includes('install');
@@ -191,16 +194,6 @@ describe('warmup --firefox flag', () => {
     expect(calls.find(hasFirefoxInstall)).toBeDefined();
     expect(result.firefox).toBe('ok');
     expect(result.reranker).toBe('ok');
-  });
-
-  it('--firefox does not interfere with --trafilatura', async () => {
-    const result = await runWarmup(['--firefox', '--trafilatura']);
-
-    const calls = vi.mocked(runCommand).mock.calls;
-    expect(calls.find(hasFirefoxInstall)).toBeDefined();
-    expect(calls.find((c) => includesArg(c, 'trafilatura'))).toBeDefined();
-    expect(result.firefox).toBe('ok');
-    expect(result.trafilatura).toBe('ok');
   });
 
   it('handles --force combined with --firefox', async () => {

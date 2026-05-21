@@ -4,26 +4,39 @@ import { resetConfig } from '../../src/config.js';
 import { initDatabase, closeDatabase } from '../../src/cache/db.js';
 import type { SearchInput, RawSearchResult, SearchEngine } from '../../src/types.js';
 import type { SmartRouter } from '../../src/fetch/router.js';
+import type {
+  RerankProvider,
+  RerankCandidate,
+} from '../../src/providers/rerank-provider.js';
 
-vi.mock('../../src/extraction/pipeline.js', () => ({
-  extractContent: vi.fn().mockResolvedValue({
-    title: 'mock',
-    markdown: '# mock',
-    metadata: {},
-    links: [],
-    images: [],
-    extractor: 'defuddle' as const,
-  }),
+const extractMock = vi.fn().mockResolvedValue({
+  title: 'mock',
+  markdown: '# mock',
+  metadata: {},
+  links: [],
+  images: [],
+  extractor: 'defuddle' as const,
+});
+vi.mock('../../src/providers/extract-provider.js', () => ({
+  getExtractProvider: vi.fn(async () => ({
+    name: 'v1' as const,
+    extract: extractMock,
+  })),
+  _resetExtractProviderForTest: vi.fn(),
 }));
 
-// Mock onnxRerank so the test runs without downloading the model.
-vi.mock('../../src/search/reranker/onnx.js', () => ({
-  onnxRerank: vi.fn(async (_q: string, docs: { text: string }[]) =>
-    docs.map((_, i) => ({ index: i, score: 1 - i * 0.1 })),
-  ),
+
+// Mock rerank provider so the test runs without downloading the model.
+vi.mock('../../src/providers/rerank-provider.js', () => ({
+  getRerankProvider: vi.fn(async (): Promise<RerankProvider> => ({
+    modelId: 'mock',
+    rerank: vi.fn(async (_q: string, candidates: RerankCandidate[]) =>
+      candidates.map((c, i) => ({ id: c.id, score: 1 - i * 0.1 })),
+    ),
+  })),
 }));
 
-describe('integration: onnx rerank E2E', () => {
+describe('integration: cross-encoder rerank E2E', () => {
   const originalEnv = process.env;
   const router = {
     fetch: vi.fn().mockResolvedValue({
@@ -65,11 +78,12 @@ describe('integration: onnx rerank E2E', () => {
       ] satisfies RawSearchResult[]),
     };
     const input: SearchInput = { query: 'test query', include_content: false };
-    const __r_out = await handleSearch(input, [engine], router);;
-    const out = __r_out.ok ? __r_out.data : ({ ...__r_out } as any);
-    expect(out.results.length).toBeGreaterThanOrEqual(3);
-    for (let i = 1; i < out.results.length; i++) {
-      expect(out.results[i - 1].relevance_score).toBeGreaterThanOrEqual(out.results[i].relevance_score);
+    const __r_out = await handleSearch(input, [engine], router);
+    const out = __r_out.ok ? __r_out.data : ({ ...__r_out } as Record<string, unknown>);
+    const results = (out as { results: { relevance_score: number }[] }).results;
+    expect(results.length).toBeGreaterThanOrEqual(3);
+    for (let i = 1; i < results.length; i++) {
+      expect(results[i - 1].relevance_score).toBeGreaterThanOrEqual(results[i].relevance_score);
     }
   });
 });

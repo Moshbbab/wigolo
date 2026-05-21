@@ -5,16 +5,22 @@ import { resetConfig } from '../../../src/config.js';
 import { initDatabase, closeDatabase } from '../../../src/cache/db.js';
 
 // Mock extraction pipeline
-vi.mock('../../../src/extraction/pipeline.js', () => ({
-  extractContent: vi.fn().mockResolvedValue({
-    title: 'Mock',
-    markdown: '# Mock\n\nContent.',
-    metadata: {},
-    links: [],
-    images: [],
-    extractor: 'defuddle' as const,
-  }),
+const extractMock = vi.fn().mockResolvedValue({
+  title: 'Mock',
+  markdown: '# Mock\n\nContent.',
+  metadata: {},
+  links: [],
+  images: [],
+  extractor: 'defuddle' as const,
+});
+vi.mock('../../../src/providers/extract-provider.js', () => ({
+  getExtractProvider: vi.fn(async () => ({
+    name: 'v1' as const,
+    extract: extractMock,
+  })),
+  _resetExtractProviderForTest: vi.fn(),
 }));
+
 
 const { handleFindSimilar } = await import('../../../src/tools/find-similar.js');
 

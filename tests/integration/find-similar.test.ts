@@ -6,16 +6,22 @@ import { initDatabase, closeDatabase } from '../../src/cache/db.js';
 import { cacheContent } from '../../src/cache/store.js';
 
 // Mock extraction pipeline
-vi.mock('../../src/extraction/pipeline.js', () => ({
-  extractContent: vi.fn().mockResolvedValue({
-    title: 'Fetched Page',
-    markdown: '# Fetched Page\n\nContent about **React** hooks and state management patterns.',
-    metadata: {},
-    links: [],
-    images: [],
-    extractor: 'defuddle' as const,
-  }),
+const extractMock = vi.fn().mockResolvedValue({
+  title: 'Fetched Page',
+  markdown: '# Fetched Page\n\nContent about **React** hooks and state management patterns.',
+  metadata: {},
+  links: [],
+  images: [],
+  extractor: 'defuddle' as const,
+});
+vi.mock('../../src/providers/extract-provider.js', () => ({
+  getExtractProvider: vi.fn(async () => ({
+    name: 'v1' as const,
+    extract: extractMock,
+  })),
+  _resetExtractProviderForTest: vi.fn(),
 }));
+
 
 const { handleFindSimilar } = await import('../../src/tools/find-similar.js');
 

@@ -2,16 +2,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { SearchEngine, RawSearchResult, ResearchInput } from '../../src/types.js';
 import type { SmartRouter } from '../../src/fetch/router.js';
 
-vi.mock('../../src/extraction/pipeline.js', () => ({
-  extractContent: vi.fn().mockResolvedValue({
-    title: 'Integration Article',
-    markdown: '# Article\n\nDetailed content about TypeScript generics and type system features. This covers everything from basic generic functions to advanced conditional types.',
-    metadata: {},
-    links: [],
-    images: [],
-    extractor: 'defuddle' as const,
-  }),
+const extractMock = vi.fn().mockResolvedValue({
+  title: 'Integration Article',
+  markdown: '# Article\n\nDetailed content about TypeScript generics and type system features. This covers everything from basic generic functions to advanced conditional types.',
+  metadata: {},
+  links: [],
+  images: [],
+  extractor: 'defuddle' as const,
+});
+vi.mock('../../src/providers/extract-provider.js', () => ({
+  getExtractProvider: vi.fn(async () => ({
+    name: 'v1' as const,
+    extract: extractMock,
+  })),
+  _resetExtractProviderForTest: vi.fn(),
 }));
+
 
 vi.mock('../../src/cache/store.js', () => ({
   cacheContent: vi.fn(),

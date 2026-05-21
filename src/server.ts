@@ -6,6 +6,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { SmartRouter, type HttpClient } from './fetch/router.js';
 import { MultiBrowserPool } from './fetch/browser-pool.js';
@@ -29,10 +31,16 @@ import { resolveSearchBackend, bootstrapNativeSearxng, getBootstrapState } from 
 import { SearxngProcess } from './searxng/process.js';
 import { DockerSearxng } from './searxng/docker.js';
 import { BackendStatus } from './server/backend-status.js';
+import { maybeEagerWarmup } from './server/warmup-on-start.js';
 import { getEmbeddingService, resetEmbeddingService } from './embedding/embed.js';
 import { getConfig } from './config.js';
 import { createLogger } from './logger.js';
-import { WIGOLO_INSTRUCTIONS, TOOL_DESCRIPTIONS } from './instructions.js';
+import {
+  WIGOLO_INSTRUCTIONS,
+  WIGOLO_INSTRUCTIONS_FULL,
+  WIGOLO_DOCS_URI,
+  TOOL_DESCRIPTIONS,
+} from './instructions.js';
 import {
   FETCH_TOOL_SCHEMA,
   SEARCH_TOOL_SCHEMA,
@@ -242,8 +250,6 @@ export async function initSubsystems(): Promise<Subsystems> {
     await browserPool.shutdown();
     await closeDaemonBrowser().catch((e) => log.debug('closeDaemonBrowser failed', { error: e instanceof Error ? e.message : String(e) }));
     resetEmbeddingService();
-    const { resetAllRerankSubprocesses } = await import('./python/reranker-subprocess.js');
-    resetAllRerankSubprocesses();
     closeDatabase();
   }
 
@@ -267,10 +273,36 @@ export function createMcpServer(subsystems: Subsystems): Server {
   const server = new Server(
     { name: 'wigolo', version: SERVER_VERSION },
     {
-      capabilities: { tools: {} },
+      capabilities: { tools: {}, resources: {} },
       instructions: WIGOLO_INSTRUCTIONS,
     },
   );
+
+  server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+    resources: [
+      {
+        uri: WIGOLO_DOCS_URI,
+        name: 'Wigolo usage guide',
+        description: 'Routing tables, performance budgets, auth flows, and other detail trimmed from the per-session instructions.',
+        mimeType: 'text/markdown',
+      },
+    ],
+  }));
+
+  server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    if (request.params.uri !== WIGOLO_DOCS_URI) {
+      throw new Error(`Unknown resource: ${request.params.uri}`);
+    }
+    return {
+      contents: [
+        {
+          uri: WIGOLO_DOCS_URI,
+          mimeType: 'text/markdown',
+          text: WIGOLO_INSTRUCTIONS_FULL,
+        },
+      ],
+    };
+  });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
@@ -476,6 +508,8 @@ export async function startServer(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log.info('MCP server started');
+
+  maybeEagerWarmup();
 
   subs.bootstrapSearxng().catch((err) => {
     log.warn('search engine bootstrap failed', { error: String(err) });

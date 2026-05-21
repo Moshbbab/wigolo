@@ -1,10 +1,7 @@
 import { execSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { SearxngProcess } from '../../searxng/process.js';
 import { getPythonBin } from '../../python-env.js';
-import { getConfig } from '../../config.js';
-import { resolveModelId } from '../../search/reranker/models.js';
+import { getRerankProvider } from '../../providers/rerank-provider.js';
 import type { WarmupReporter } from './reporter.js';
 import { suggestionsFromResult } from './verify-suggestions.js';
 
@@ -14,8 +11,6 @@ export interface VerifyResult {
   searxngError?: string;
   reranker: 'ok' | 'missing';
   rerankerError?: string;
-  trafilatura: 'ok' | 'missing';
-  trafilaturaError?: string;
   embeddings: 'ok' | 'missing';
   embeddingsError?: string;
   embeddingsDim?: number;
@@ -23,8 +18,7 @@ export interface VerifyResult {
 }
 
 const SEARXNG_LABEL = 'Starting search engine (searxng)';
-const RERANKER_LABEL = 'Checking ML reranker (onnx)';
-const TRAFILATURA_LABEL = 'Checking content extractor (trafilatura)';
+const RERANKER_LABEL = 'Checking ML reranker (cross-encoder)';
 const EMBEDDINGS_LABEL = 'Checking embeddings';
 
 export async function runVerify(
@@ -34,7 +28,6 @@ export async function runVerify(
   const result: VerifyResult = {
     searxng: 'failed',
     reranker: 'missing',
-    trafilatura: 'missing',
     embeddings: 'missing',
     allPassed: false,
   };
@@ -68,13 +61,9 @@ export async function runVerify(
 
   const py = getPythonBin(dataDir);
 
-  const rerankerProbe = runOnnxRerankerProbe(dataDir, reporter);
+  const rerankerProbe = await runRerankerProbe(reporter);
   result.reranker = rerankerProbe.state;
   if (rerankerProbe.error) result.rerankerError = rerankerProbe.error;
-
-  result.trafilatura = runImportProbe(py, 'trafilatura', TRAFILATURA_LABEL, 'trafilatura', reporter, (err) => {
-    result.trafilaturaError = err;
-  });
 
   const { state: embeddingsState, error: embeddingsError, dim } = runEmbeddingsProbe(py, reporter);
   result.embeddings = embeddingsState;
@@ -85,48 +74,19 @@ export async function runVerify(
   return finalize(result);
 }
 
-function runOnnxRerankerProbe(
-  dataDir: string,
+async function runRerankerProbe(
   reporter: WarmupReporter,
-): { state: 'ok' | 'missing'; error?: string } {
+): Promise<{ state: 'ok' | 'missing'; error?: string }> {
   reporter.start('reranker', RERANKER_LABEL);
-  let modelId: string;
   try {
-    modelId = resolveModelId(getConfig().rerankerModel);
+    const provider = await getRerankProvider();
+    await provider.rerank('warmup', [{ id: '0', text: 'hello world' }]);
+    reporter.success('reranker', `installed (${provider.modelId})`);
+    return { state: 'ok' };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    reporter.fail('reranker', 'config error');
-    return { state: 'missing', error: message };
-  }
-  const dir = join(dataDir, 'models', modelId);
-  const required = ['model_quantized.onnx', 'tokenizer.json', 'tokenizer_config.json'];
-  const missing = required.filter((f) => !existsSync(join(dir, f)));
-  if (missing.length > 0) {
     reporter.fail('reranker', 'not installed');
-    return { state: 'missing', error: `missing: ${missing.join(', ')}` };
-  }
-  reporter.success('reranker', `installed (${modelId})`);
-  return { state: 'ok' };
-}
-
-function runImportProbe(
-  py: string,
-  moduleName: string,
-  label: string,
-  id: 'trafilatura',
-  reporter: WarmupReporter,
-  onError: (err: string) => void,
-): 'ok' | 'missing' {
-  reporter.start(id, label);
-  try {
-    execSync(`${py} -c "import ${moduleName}"`, { stdio: 'pipe', timeout: 30000 });
-    reporter.success(id, 'installed');
-    return 'ok';
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    onError(message);
-    reporter.fail(id, 'not installed');
-    return 'missing';
+    return { state: 'missing', error: message };
   }
 }
 
@@ -157,7 +117,6 @@ function finalize(result: VerifyResult, reporter?: WarmupReporter): VerifyResult
   result.allPassed =
     result.searxng === 'ok' &&
     result.reranker === 'ok' &&
-    result.trafilatura === 'ok' &&
     result.embeddings === 'ok';
   if (!result.allPassed && reporter) {
     for (const note of suggestionsFromResult(result)) reporter.note(note);

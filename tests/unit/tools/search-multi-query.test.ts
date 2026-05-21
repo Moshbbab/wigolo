@@ -5,16 +5,22 @@ import type { SmartRouter } from '../../../src/fetch/router.js';
 import { resetConfig } from '../../../src/config.js';
 import { initDatabase, closeDatabase } from '../../../src/cache/db.js';
 
-vi.mock('../../../src/extraction/pipeline.js', () => ({
-  extractContent: vi.fn().mockResolvedValue({
-    title: 'Mock Title',
-    markdown: '# Mock Content\n\nSome extracted content here.',
-    metadata: {},
-    links: [],
-    images: [],
-    extractor: 'defuddle' as const,
-  }),
+const extractMock = vi.fn().mockResolvedValue({
+  title: 'Mock Title',
+  markdown: '# Mock Content\n\nSome extracted content here.',
+  metadata: {},
+  links: [],
+  images: [],
+  extractor: 'defuddle' as const,
+});
+vi.mock('../../../src/providers/extract-provider.js', () => ({
+  getExtractProvider: vi.fn(async () => ({
+    name: 'v1' as const,
+    extract: extractMock,
+  })),
+  _resetExtractProviderForTest: vi.fn(),
 }));
+
 
 describe('handleSearch with multi-query array input', () => {
   const originalEnv = process.env;

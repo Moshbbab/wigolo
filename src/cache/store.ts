@@ -169,6 +169,14 @@ export function getCachedContent(url: string): CachedContent | null {
   return row ? rowToCachedContent(row) : null;
 }
 
+export function getCachedContentByNormalizedUrl(normalizedUrl: string): CachedContent | null {
+  const db = getDatabase();
+  const row = db.prepare(
+    'SELECT * FROM url_cache WHERE normalized_url = ? LIMIT 1',
+  ).get(normalizedUrl) as DbRow | undefined;
+  return row ? rowToCachedContent(row) : null;
+}
+
 export function getHashForNormalizedUrl(normalizedUrl: string): string | null {
   const db = getDatabase();
   const row = db.prepare(
@@ -329,6 +337,26 @@ export function searchCacheFiltered(options: {
   return rows.map(rowToCachedContent);
 }
 
+/**
+ * BM25-ranked FTS5 search across cached pages. Returns normalized URLs
+ * paired with their rank score. `rank` from FTS5 is negative (lower is
+ * better in sqlite ordering), so we flip the sign to surface a "higher is
+ * better" score for consumers (e.g. RRF input).
+ */
+export function ftsSearchRanked(query: string, limit: number): Array<{ url: string; score: number }> {
+  if (!query.trim() || limit <= 0) return [];
+  const db = getDatabase();
+  const rows = db.prepare(`
+    SELECT url_cache.normalized_url AS url, url_cache_fts.rank AS rank
+    FROM url_cache
+    JOIN url_cache_fts ON url_cache.id = url_cache_fts.rowid
+    WHERE url_cache_fts MATCH ?
+    ORDER BY url_cache_fts.rank
+    LIMIT ?
+  `).all(sanitizeFtsQuery(query), limit) as Array<{ url: string; rank: number }>;
+  return rows.map(r => ({ url: r.url, score: -r.rank }));
+}
+
 export function clearCacheEntries(options: {
   query?: string;
   urlPattern?: string;
@@ -445,7 +473,7 @@ export interface EmbeddingData {
   dims: number;
 }
 
-export function getEmbeddingForUrl(url: string): EmbeddingData | null {
+export function getEmbeddingForUrl(url: string, modelId?: string): EmbeddingData | null {
   try {
     const db = getDatabase();
     let normalized: string;
@@ -463,6 +491,9 @@ export function getEmbeddingForUrl(url: string): EmbeddingData | null {
     `).get(url, normalized) as { embedding: Buffer; embedding_model: string; embedding_dims: number } | undefined;
 
     if (!row) return null;
+    // Filter by modelId when caller wants only embeddings from the current
+    // model; mismatched entries return null so they are treated as cache miss.
+    if (modelId !== undefined && row.embedding_model !== modelId) return null;
 
     return {
       embedding: row.embedding,
@@ -481,19 +512,33 @@ export interface StoredEmbedding {
   dims: number;
 }
 
-export function getAllEmbeddings(): StoredEmbedding[] {
+export function getAllEmbeddings(modelId?: string): StoredEmbedding[] {
   try {
     const db = getDatabase();
-    const rows = db.prepare(`
-      SELECT normalized_url, embedding, embedding_model, embedding_dims
-      FROM url_cache
-      WHERE embedding IS NOT NULL
-    `).all() as Array<{
-      normalized_url: string;
-      embedding: Buffer;
-      embedding_model: string;
-      embedding_dims: number;
-    }>;
+    // Filter by modelId when provided so stale entries from a previous model
+    // (different dim / vector space) are skipped — the in-memory vector index
+    // requires matching dimensionality across all entries.
+    const rows = modelId !== undefined
+      ? db.prepare(`
+          SELECT normalized_url, embedding, embedding_model, embedding_dims
+          FROM url_cache
+          WHERE embedding IS NOT NULL AND embedding_model = ?
+        `).all(modelId) as Array<{
+          normalized_url: string;
+          embedding: Buffer;
+          embedding_model: string;
+          embedding_dims: number;
+        }>
+      : db.prepare(`
+          SELECT normalized_url, embedding, embedding_model, embedding_dims
+          FROM url_cache
+          WHERE embedding IS NOT NULL
+        `).all() as Array<{
+          normalized_url: string;
+          embedding: Buffer;
+          embedding_model: string;
+          embedding_dims: number;
+        }>;
 
     return rows.map(r => ({
       normalizedUrl: r.normalized_url,

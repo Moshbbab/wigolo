@@ -1,8 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-
-vi.mock('../../../src/embedding/subprocess.js', () => {
-  return { EmbeddingSubprocess: vi.fn() };
-});
+import type { EmbedProvider } from '../../../src/providers/embed-provider.js';
+import type { VectorStore } from '../../../src/providers/vector-store.js';
 
 vi.mock('../../../src/cache/store.js', () => ({
   updateCacheEmbedding: vi.fn().mockReturnValue(true),
@@ -10,11 +8,50 @@ vi.mock('../../../src/cache/store.js', () => ({
   normalizeUrl: vi.fn((url: string) => url),
 }));
 
+const mockStoreState: {
+  store: VectorStore;
+  records: Map<string, { vector: Float32Array; metadata: { url: string; contentHash: string; modelId: string } }>;
+} = {
+  records: new Map(),
+  store: {
+    upsert: vi.fn(),
+    delete: vi.fn(),
+    size: vi.fn(),
+    search: vi.fn(),
+  },
+};
+
+mockStoreState.store.upsert = vi.fn(async (records) => {
+  for (const r of records) {
+    mockStoreState.records.set(r.id, { vector: r.vector, metadata: r.metadata });
+  }
+});
+mockStoreState.store.delete = vi.fn(async (ids) => {
+  for (const id of ids) mockStoreState.records.delete(id);
+});
+mockStoreState.store.size = vi.fn(async () => mockStoreState.records.size);
+mockStoreState.store.search = vi.fn(async (_q, limit) => {
+  return [...mockStoreState.records.entries()].slice(0, limit).map(([id, v]) => ({
+    id,
+    score: 0.9,
+    metadata: v.metadata,
+  }));
+});
+
+vi.mock('../../../src/providers/vector-store.js', async () => {
+  const actual = await vi.importActual<typeof import('../../../src/providers/vector-store.js')>(
+    '../../../src/providers/vector-store.js',
+  );
+  return {
+    ...actual,
+    getVectorStore: vi.fn(async () => mockStoreState.store),
+  };
+});
+
 vi.mock('../../../src/config.js', () => ({
   getConfig: vi.fn().mockReturnValue({
+    dataDir: '/tmp/wigolo-test',
     embeddingModel: 'BAAI/bge-small-en-v1.5',
-    embeddingIdleTimeoutMs: 120000,
-    embeddingMaxTextLength: 8000,
   }),
 }));
 
@@ -27,35 +64,30 @@ vi.mock('../../../src/logger.js', () => ({
   }),
 }));
 
-import { EmbeddingSubprocess } from '../../../src/embedding/subprocess.js';
 import { updateCacheEmbedding, getAllEmbeddings } from '../../../src/cache/store.js';
 
+interface MockProvider extends EmbedProvider {
+  embed: ReturnType<typeof vi.fn>;
+}
+
+function makeMockProvider(overrides: Partial<MockProvider> = {}): MockProvider {
+  const defaultVector = new Float32Array(384).fill(0.1);
+  return {
+    modelId: 'BGE-small-en-v1.5',
+    dim: 384,
+    embed: vi.fn().mockResolvedValue([defaultVector]),
+    ...overrides,
+  };
+}
+
 describe('EmbeddingService', () => {
-  let EmbeddingService: any;
-  let mockSubprocess: any;
+  let EmbeddingService: typeof import('../../../src/embedding/embed.js').EmbeddingService;
 
   beforeEach(async () => {
     vi.clearAllMocks();
-
-    // Reset module mock return values (clearAllMocks only clears calls, not implementations)
+    mockStoreState.records.clear();
     vi.mocked(getAllEmbeddings).mockReturnValue([]);
     vi.mocked(updateCacheEmbedding).mockReturnValue(true);
-
-    mockSubprocess = {
-      embed: vi.fn().mockResolvedValue({
-        id: 'test',
-        vector: new Array(384).fill(0.1),
-      }),
-      shutdown: vi.fn(),
-      isAvailable: vi.fn().mockReturnValue(true),
-      getDims: vi.fn().mockReturnValue(384),
-      getModel: vi.fn().mockReturnValue('bge-small-en-v1.5'),
-    };
-
-    vi.mocked(EmbeddingSubprocess).mockImplementation(function () {
-      return mockSubprocess;
-    } as any);
-
     const mod = await import('../../../src/embedding/embed.js');
     EmbeddingService = mod.EmbeddingService;
   });
@@ -65,25 +97,23 @@ describe('EmbeddingService', () => {
   });
 
   it('embedAndStore computes embedding and updates cache', async () => {
-    const service = new EmbeddingService();
+    const provider = makeMockProvider();
+    const service = new EmbeddingService(provider);
     await service.init();
 
     await service.embedAndStore('https://example.com', 'Hello world content');
 
-    expect(mockSubprocess.embed).toHaveBeenCalledWith(
-      expect.any(String),
-      'Hello world content',
-    );
+    expect(provider.embed).toHaveBeenCalledWith(['Hello world content']);
     expect(updateCacheEmbedding).toHaveBeenCalledWith(
       'https://example.com',
       expect.any(Buffer),
-      'bge-small-en-v1.5',
+      'BGE-small-en-v1.5',
       384,
     );
   });
 
   it('embedAndStore adds vector to in-memory index', async () => {
-    const service = new EmbeddingService();
+    const service = new EmbeddingService(makeMockProvider());
     await service.init();
 
     await service.embedAndStore('https://example.com', 'Content');
@@ -93,46 +123,43 @@ describe('EmbeddingService', () => {
     expect(index.size()).toBe(1);
   });
 
-  it('embedAndStore handles subprocess error gracefully', async () => {
-    mockSubprocess.embed.mockRejectedValue(new Error('subprocess crashed'));
-
-    const service = new EmbeddingService();
+  it('embedAndStore handles provider error gracefully', async () => {
+    const provider = makeMockProvider({
+      embed: vi.fn().mockRejectedValue(new Error('provider crashed')),
+    });
+    const service = new EmbeddingService(provider);
     await service.init();
 
     await expect(service.embedAndStore('https://error.com', 'Content')).resolves.not.toThrow();
   });
 
-  it('embedAndStore skips when subprocess not available', async () => {
-    mockSubprocess.isAvailable.mockReturnValue(false);
-
-    const service = new EmbeddingService();
+  it('embedAndStore skips when service marked unavailable', async () => {
+    const provider = makeMockProvider();
+    const service = new EmbeddingService(provider);
     service.setAvailable(false);
 
     await service.embedAndStore('https://skip.com', 'Content');
 
-    expect(mockSubprocess.embed).not.toHaveBeenCalled();
+    expect(provider.embed).not.toHaveBeenCalled();
     expect(updateCacheEmbedding).not.toHaveBeenCalled();
   });
 
   it('embedAndStore handles empty text', async () => {
-    const service = new EmbeddingService();
+    const provider = makeMockProvider();
+    const service = new EmbeddingService(provider);
     await service.init();
 
     await service.embedAndStore('https://empty.com', '');
 
-    expect(mockSubprocess.embed).toHaveBeenCalled();
+    expect(provider.embed).toHaveBeenCalled();
   });
 
-  it('findSimilar delegates to VectorIndex', async () => {
-    const service = new EmbeddingService();
+  it('findSimilar delegates to VectorStore', async () => {
+    const provider = makeMockProvider();
+    const service = new EmbeddingService(provider);
     await service.init();
 
     await service.embedAndStore('https://example.com', 'Content about TypeScript');
-
-    mockSubprocess.embed.mockResolvedValue({
-      id: 'query',
-      vector: new Array(384).fill(0.1),
-    });
 
     const results = await service.findSimilar('TypeScript', 5);
 
@@ -141,62 +168,61 @@ describe('EmbeddingService', () => {
   });
 
   it('findSimilar returns empty when index is empty', async () => {
-    const service = new EmbeddingService();
+    const service = new EmbeddingService(makeMockProvider());
     await service.init();
 
     const results = await service.findSimilar('query', 5);
     expect(results).toEqual([]);
   });
 
-  it('findSimilar returns empty when subprocess not available', async () => {
-    mockSubprocess.isAvailable.mockReturnValue(false);
-
-    const service = new EmbeddingService();
+  it('findSimilar returns empty when service unavailable', async () => {
+    const service = new EmbeddingService(makeMockProvider());
     service.setAvailable(false);
 
     const results = await service.findSimilar('query', 5);
     expect(results).toEqual([]);
   });
 
-  it('init loads existing embeddings from database', async () => {
+  it('init loads existing embeddings from database filtered by current modelId', async () => {
     vi.mocked(getAllEmbeddings).mockReturnValue([
       {
         normalizedUrl: 'https://cached.com',
         embedding: Buffer.from(new Float32Array(384).buffer),
-        model: 'bge-small-en-v1.5',
+        model: 'BGE-small-en-v1.5',
         dims: 384,
       },
     ]);
 
-    const service = new EmbeddingService();
+    const service = new EmbeddingService(makeMockProvider());
     await service.init();
 
+    expect(getAllEmbeddings).toHaveBeenCalledWith('BGE-small-en-v1.5');
     const index = service.getIndex();
     expect(index.has('https://cached.com')).toBe(true);
     expect(index.size()).toBe(1);
   });
 
-  it('shutdown cleans up subprocess and index', async () => {
-    const service = new EmbeddingService();
+  it('shutdown clears index and marks unavailable', async () => {
+    const service = new EmbeddingService(makeMockProvider());
     await service.init();
 
     await service.embedAndStore('https://example.com', 'Content');
     service.shutdown();
 
-    expect(mockSubprocess.shutdown).toHaveBeenCalled();
     expect(service.getIndex().size()).toBe(0);
+    expect(service.isAvailable()).toBe(false);
   });
 
   it('embedAsync does not block caller', async () => {
-    const service = new EmbeddingService();
-    await service.init();
-
-    let resolveEmbed: () => void;
-    mockSubprocess.embed.mockReturnValue(new Promise<void>((resolve) => {
-      resolveEmbed = () => {
-        resolve({ id: 'slow', vector: new Array(384).fill(0.1) } as any);
-      };
-    }));
+    let resolveEmbed: (v: Float32Array[]) => void = () => {};
+    const provider = makeMockProvider({
+      embed: vi.fn().mockReturnValue(new Promise<Float32Array[]>(resolve => {
+        resolveEmbed = resolve;
+      })),
+    });
+    const service = new EmbeddingService(provider);
+    // skip init() to avoid awaiting the probe-embed that uses our gated promise
+    service.setAvailable(true);
 
     const start = Date.now();
     service.embedAsync('https://slow.com', 'Slow content');
@@ -204,18 +230,15 @@ describe('EmbeddingService', () => {
 
     expect(elapsed).toBeLessThan(50);
 
-    resolveEmbed!();
+    resolveEmbed([new Float32Array(384).fill(0.1)]);
     await new Promise(r => setTimeout(r, 10));
   });
 
   it('handles concurrent embedAndStore calls', async () => {
-    let callCount = 0;
-    mockSubprocess.embed.mockImplementation(async () => {
-      callCount++;
-      return { id: `call-${callCount}`, vector: new Array(384).fill(0.1 * callCount) };
+    const provider = makeMockProvider({
+      embed: vi.fn().mockImplementation(async () => [new Float32Array(384).fill(0.1)]),
     });
-
-    const service = new EmbeddingService();
+    const service = new EmbeddingService(provider);
     await service.init();
 
     const promises = [
@@ -230,33 +253,10 @@ describe('EmbeddingService', () => {
     expect(updateCacheEmbedding).toHaveBeenCalledTimes(3);
   });
 
-  it('generates unique request IDs', async () => {
-    const ids = new Set<string>();
-    mockSubprocess.embed.mockImplementation(async (id: string) => {
-      ids.add(id);
-      return { id, vector: [0.1] };
-    });
-
-    const service = new EmbeddingService();
+  it('isSubprocessReady reflects provider verification state', async () => {
+    const service = new EmbeddingService(makeMockProvider());
+    expect(service.isSubprocessReady()).toBe(false);
     await service.init();
-
-    // init() calls embed once for the probe, so we start with 1 ID
-    const idsAfterInit = ids.size;
-
-    await service.embedAndStore('https://a.com', 'A');
-    await service.embedAndStore('https://b.com', 'B');
-
-    expect(ids.size - idsAfterInit).toBe(2);
-  });
-
-  it('converts number[] vector to Float32Array for index', async () => {
-    const service = new EmbeddingService();
-    await service.init();
-
-    await service.embedAndStore('https://example.com', 'Content');
-
-    const index = service.getIndex();
-    const results = index.findSimilar(new Float32Array(384).fill(0.1), 1);
-    expect(results.length).toBe(1);
+    expect(service.isSubprocessReady()).toBe(true);
   });
 });

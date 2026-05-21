@@ -3,10 +3,7 @@ import { join } from 'node:path';
 import { getConfig } from '../config.js';
 import { checkPythonAvailable, bootstrapNativeSearxng, getBootstrapState } from '../searxng/bootstrap.js';
 import { isProcessAlive } from '../searxng/process.js';
-import { downloadModelAssets } from '../search/reranker/download.js';
-import { onnxRerank } from '../search/reranker/onnx.js';
-import { resolveModelId } from '../search/reranker/models.js';
-import { getPythonBin } from '../python-env.js';
+import { getRerankProvider } from '../providers/rerank-provider.js';
 import { runCommand } from './tui/run-command.js';
 import type { WarmupReporter } from './tui/reporter.js';
 import { autoReporter } from './tui/reporter-auto.js';
@@ -17,7 +14,6 @@ export interface WarmupResult {
   playwrightError?: string;
   searxng: 'ready' | 'bootstrapped' | 'failed' | 'no_python';
   searxngError?: string;
-  trafilatura?: 'ok' | 'failed' | 'skipped';
   reranker?: 'ok' | 'failed';
   rerankerError?: string;
   firefox?: 'ok' | 'failed';
@@ -65,43 +61,21 @@ async function installPlaywright(reporter: WarmupReporter): Promise<Pick<WarmupR
   return { playwright: 'failed', playwrightError: message };
 }
 
-async function installTrafilatura(dataDir: string, reporter: WarmupReporter): Promise<'ok' | 'failed'> {
-  reporter.start('trafilatura', 'Installing content extractor (trafilatura)');
-  const py = getPythonBin(dataDir);
-  const r = await runCommand(py, ['-m', 'pip', 'install', '--quiet', 'trafilatura'], { timeout: 180000 });
-  if (r.code === 0) {
-    reporter.success('trafilatura', 'installed');
-    return 'ok';
-  }
-  const message = (r.stderr || r.stdout || `exit ${r.code}`).trim();
-  reporter.fail('trafilatura', message);
-  return 'failed';
-}
-
-async function installRerankerPython(
-  dataDir: string,
+async function installReranker(
   reporter: WarmupReporter,
-  installEmbeddings: boolean,
 ): Promise<Pick<WarmupResult, 'reranker' | 'rerankerError'>> {
-  reporter.start('reranker', 'Installing ML reranker (tokenizers + onnxruntime)');
-  const py = getPythonBin(dataDir);
-  const pkgs = ['tokenizers', 'onnxruntime'];
-  if (installEmbeddings) pkgs.unshift('sentence-transformers');
-  const r = await runCommand(
-    py,
-    ['-m', 'pip', 'install', '--quiet', '--upgrade-strategy', 'only-if-needed', ...pkgs],
-    { timeout: 300_000 },
-  );
-  if (r.code !== 0) {
-    const message = (r.stderr || r.stdout || `exit ${r.code}`).trim();
-    reporter.fail('reranker', message);
-    return { reranker: 'failed', rerankerError: message };
-  }
-  const modelId = resolveModelId(getConfig().rerankerModel);
+  reporter.start('reranker', 'Downloading ML reranker model (cross-encoder)');
   try {
-    await downloadModelAssets(modelId, dataDir, reporter);
-    await onnxRerank('warmup', [{ text: 'hello world' }], { modelId });
-    reporter.success('reranker', 'installed');
+    const provider = await getRerankProvider();
+    // Smoke-test end-to-end: warmup loads model + tokenizer, then a single
+    // rerank call exercises the inference path.
+    const scored = await provider.rerank('warmup', [
+      { id: '0', text: 'hello world' },
+    ]);
+    if (scored.length !== 1) {
+      throw new Error(`unexpected rerank shape (results=${scored.length})`);
+    }
+    reporter.success('reranker', `model ${provider.modelId} ready`);
     return { reranker: 'ok' };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -134,18 +108,24 @@ async function installWebkit(reporter: WarmupReporter): Promise<Pick<WarmupResul
   return { webkit: 'failed', webkitError: message };
 }
 
-async function installSentenceTransformers(dataDir: string, reporter: WarmupReporter): Promise<Pick<WarmupResult, 'embeddings' | 'embeddingsError'>> {
-  const py = getPythonBin(dataDir);
-  reporter.start('embeddings', 'Installing semantic embeddings (sentence-transformers)');
-  const r = await runCommand(py, ['-m', 'pip', 'install', '--quiet',
-    '--upgrade-strategy', 'only-if-needed', 'sentence-transformers'], { timeout: 300_000 });
-  if (r.code === 0) {
-    reporter.success('embeddings', 'installed');
+async function installEmbeddings(reporter: WarmupReporter): Promise<Pick<WarmupResult, 'embeddings' | 'embeddingsError'>> {
+  reporter.start('embeddings', 'Downloading semantic embeddings model (fastembed)');
+  try {
+    const { FastembedEmbedProvider } = await import('../embedding/fastembed-provider.js');
+    const provider = new FastembedEmbedProvider();
+    await provider.warmup();
+    // Probe to ensure the ONNX model can actually produce a vector end-to-end.
+    const [vec] = await provider.embed(['warmup']);
+    if (!vec || vec.length !== provider.dim) {
+      throw new Error(`unexpected embedding shape (dim=${vec?.length ?? 'undef'})`);
+    }
+    reporter.success('embeddings', `model ${provider.modelId} ready`);
     return { embeddings: 'ok' };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    reporter.fail('embeddings', message);
+    return { embeddings: 'failed', embeddingsError: message };
   }
-  const message = (r.stderr || r.stdout || `exit ${r.code}`).trim();
-  reporter.fail('embeddings', message);
-  return { embeddings: 'failed', embeddingsError: message };
 }
 
 function getLightpandaUrl(): string {
@@ -260,15 +240,9 @@ export async function runWarmup(
   const pwResult = await installPlaywright(reporterImpl);
   const searxngResult = await runSearxngPhase(config.dataDir, reporterImpl);
 
-  let trafStatus: 'ok' | 'failed' | 'skipped' = 'skipped';
-  if (flagSet.has('--trafilatura') || flagSet.has('--all')) {
-    trafStatus = await installTrafilatura(config.dataDir, reporterImpl);
-  }
-
   let rerankerResult: Pick<WarmupResult, 'reranker' | 'rerankerError'> = {};
   if (flagSet.has('--reranker') || flagSet.has('--all')) {
-    const installEmbeddings = flagSet.has('--embeddings') || flagSet.has('--all');
-    rerankerResult = await installRerankerPython(config.dataDir, reporterImpl, installEmbeddings);
+    rerankerResult = await installReranker(reporterImpl);
   }
 
   let firefoxResult: Pick<WarmupResult, 'firefox' | 'firefoxError'> = {};
@@ -283,7 +257,7 @@ export async function runWarmup(
 
   let embeddingsResult: Pick<WarmupResult, 'embeddings' | 'embeddingsError'> = {};
   if (flagSet.has('--embeddings') || flagSet.has('--all')) {
-    embeddingsResult = await installSentenceTransformers(config.dataDir, reporterImpl);
+    embeddingsResult = await installEmbeddings(reporterImpl);
   }
 
   let lightpandaResult: Pick<WarmupResult, 'lightpanda' | 'lightpandaError'> = {};
@@ -294,7 +268,6 @@ export async function runWarmup(
   const result: WarmupResult = {
     ...pwResult,
     ...searxngResult,
-    trafilatura: trafStatus,
     ...rerankerResult,
     ...firefoxResult,
     ...webkitResult,
@@ -306,7 +279,6 @@ export async function runWarmup(
   reporterImpl.note('Summary:');
   reporterImpl.note(`  Browser:       ${result.playwright}${result.playwrightError ? ` (${result.playwrightError})` : ''}`);
   reporterImpl.note(`  Search engine: ${result.searxng}${result.searxngError ? ` (${result.searxngError})` : ''}`);
-  if (trafStatus !== 'skipped') reporterImpl.note(`  Content extractor: ${trafStatus}`);
   if (result.reranker) reporterImpl.note(`  ML reranker:   ${result.reranker}${result.rerankerError ? ` (${result.rerankerError})` : ''}`);
   if (result.firefox) reporterImpl.note(`  Firefox:       ${result.firefox}${result.firefoxError ? ` (${result.firefoxError})` : ''}`);
   if (result.webkit) reporterImpl.note(`  WebKit:        ${result.webkit}${result.webkitError ? ` (${result.webkitError})` : ''}`);
@@ -315,16 +287,6 @@ export async function runWarmup(
 
   if (flagSet.has('--verify') || flagSet.has('--all')) {
     await runVerify(config.dataDir, reporterImpl);
-  }
-
-  // Reset the reranker subprocess registry before exit (legacy no-op shim
-  // retained from the pre-Python-migration shape; subprocess teardown happens
-  // via process.exit(0) in src/index.ts).
-  try {
-    const { disposeOnnxSessions } = await import('../search/reranker/onnx.js');
-    await disposeOnnxSessions();
-  } catch {
-    // best-effort cleanup; never block warmup success on it
   }
 
   reporterImpl.finish();

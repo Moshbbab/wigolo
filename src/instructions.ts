@@ -15,7 +15,47 @@
  * Schema, not here. Installation/configuration is for humans, not LLMs.
  */
 
-export const WIGOLO_INSTRUCTIONS = `Wigolo is a local-first web access layer: search the open web, fetch pages, crawl sites, extract structured data, find related content, run multi-step research, and execute agent-driven data gathering. All results land in a local knowledge cache that persists across sessions.
+// Short server-level strategy injected into the LLM system prompt each
+// initialize. ~2KB. Anything that's "good to know but rarely changes the
+// call" lives in WIGOLO_INSTRUCTIONS_FULL, surfaced via the wigolo://docs
+// resource so clients can pull it on demand without paying the cost on
+// every session.
+export const WIGOLO_INSTRUCTIONS = `Wigolo is a local-first web access layer: search, fetch, crawl, cache, extract, find_similar, research, agent. Results persist in a local knowledge cache across sessions.
+
+## Host-LLM synthesis (read this first)
+
+Wigolo returns *structured evidence* — YOU write the final answer.
+
+- \`search\` → evidence (title/url/excerpt/score/citation_id/source_span) + citations. Quote [N] or {citation_id}.
+- \`format: 'answer'|'stream_answer'\` → LLM synthesis when sampling supported; else evidence fallback.
+- \`research\` → \`brief\` with topics/highlights/key_findings/sections; use \`sections.overview.cross_references\` for corroborated findings, \`sections.gaps\` for coverage limits.
+- \`find_similar\` → \`cold_start\` string when local signals weak. Pass to user verbatim.
+- \`extract mode: "structured"\` → tables + definitions + jsonld + chart_hints + key_value_pairs in one call.
+- Common knobs: \`max_tokens_out\` caps output (cl100k-base); \`include_full_markdown: true\` restores full body; \`citation_format\`: \`'numbered'\`|\`'json'\`|\`'anthropic_tags'\`.
+
+## When to use which tool
+
+- \`search\` — info on a topic, no URL yet. Pass a string or array of 3-5 keyword variants for breadth.
+- \`fetch\` — you already have a URL.
+- \`crawl\` — many pages from one site (docs, wikis). \`strategy: "sitemap"\` is fastest for doc sites; \`"map"\` for URL-only discovery.
+- \`cache\` — check the local store before going to the network.
+- \`extract\` — specific data points (tables, metadata, schema-shaped fields) rather than a whole page.
+- \`find_similar\` — "more like this" given a URL or concept.
+- \`research\` — multi-step investigation: decomposition, parallel search, synthesis. Set \`depth\` to control thoroughness.
+- \`agent\` — natural-language data gathering across sources, optional \`schema\` for structured output.
+
+## Scope and freshness
+
+- Library/framework/SDK queries: **always pass \`include_domains\`** with the official site (e.g. \`["react.dev", "nextjs.org"]\`). Unscoped queries return noise. Skip scoping for error strings, news, and broad exploration.
+- News, prices, status, release notes → \`force_refresh: true\` to bypass cache. Docs and reference pages → let the cache work.
+
+For routing tables, performance budgets, auth flows, and other usage detail, read the resource \`wigolo://docs/usage\`.`;
+
+// Full usage guide. Surfaced via the wigolo://docs/usage resource so MCP
+// clients can pull it on demand without paying the per-initialize cost.
+export const WIGOLO_INSTRUCTIONS_FULL = `# Wigolo Usage Guide
+
+Wigolo is a local-first web access layer: search the open web, fetch pages, crawl sites, extract structured data, find related content, run multi-step research, and execute agent-driven data gathering. All results land in a local knowledge cache that persists across sessions.
 
 ## Host-LLM synthesis pattern (read this first)
 
@@ -101,6 +141,8 @@ For library/framework/SDK queries, **always pass \`include_domains\`** with offi
 - \`use_auth: true\` on \`fetch\`/\`crawl\` reuses browser session for logged-in pages.
 - \`cache\` supports full-text search syntax (\`AND\`, \`OR\`, \`NOT\`, \`"phrase"\`).
 - \`research\`/\`agent\` use MCP sampling when supported; fall back to structured data for host-LLM synthesis.`;
+
+export const WIGOLO_DOCS_URI = 'wigolo://docs/usage';
 
 export const TOOL_DESCRIPTIONS = {
   fetch: `Fetch a single URL and return clean markdown. Use when you have a specific URL to read. Automatically detects if JavaScript rendering is needed.

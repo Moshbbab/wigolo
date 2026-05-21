@@ -1,13 +1,16 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { getBootstrapState, type BootstrapState } from '../searxng/bootstrap.js';
 import { isProcessAlive } from '../searxng/process.js';
-import { getPythonBin } from '../python-env.js';
 import { getConfig } from '../config.js';
-import { resolveModelId } from '../search/reranker/models.js';
-import { onnxRerank } from '../search/reranker/onnx.js';
+import { getRerankProvider } from '../providers/rerank-provider.js';
+import { getEmbedProvider } from '../providers/embed-provider.js';
+import { initDatabase, closeDatabase } from '../cache/db.js';
+import { loadFeedConfig } from '../search/v1/rss/feed-config.js';
+import { isTelemetryEnabled } from './telemetry.js';
 import { allProviders, providerEnvVar } from '../integrations/cloud/llm/select.js';
+import { setLogSuppression } from '../logger.js';
 
 function out(line = ''): void { process.stderr.write(`${line}\n`); }
 
@@ -52,73 +55,41 @@ function checkPlaywright(): { installed: boolean; version?: string; browsers: { 
   };
 }
 
-function checkPyPackage(name: string, pythonBin: string): { ok: boolean; version?: string } {
-  const importCheck = spawnSync(pythonBin, ['-c', `import ${name}`], { encoding: 'utf-8' });
-  if (importCheck.status !== 0 || importCheck.error) return { ok: false };
-  const versionCheck = spawnSync(pythonBin, ['-c', `import ${name}; print(${name}.__version__)`], { encoding: 'utf-8' });
-  if (versionCheck.status !== 0 || versionCheck.error) return { ok: true };
-  const version = (versionCheck.stdout || '').trim();
-  return { ok: true, version: version || undefined };
+async function checkReranker(
+): Promise<{ installed: boolean; modelId?: string; rerankMs?: number; reason?: string }> {
+  try {
+    const provider = await getRerankProvider();
+    const docs = [
+      'React Server Components render on the server.',
+      'Next.js App Router uses RSC by default.',
+      'Bananas are a popular fruit.',
+      'TypeScript adds static types to JavaScript.',
+      'The capital of France is Paris.',
+    ].map((text, i) => ({ id: String(i), text }));
+    const t0 = Date.now();
+    await provider.rerank('react server components', docs);
+    const rerankMs = Date.now() - t0;
+    return { installed: true, modelId: provider.modelId, rerankMs };
+  } catch (err) {
+    return { installed: false, reason: err instanceof Error ? err.message : 'rerank failed' };
+  }
 }
 
-async function checkOnnxReranker(
-  dataDir: string,
-): Promise<{ installed: boolean; modelId?: string; rerankMs?: number; reason?: string }> {
-  let modelId: string;
+function checkFastembedCache(dataDir: string): { installed: boolean; reason?: string } {
+  const cacheDir = join(dataDir, 'fastembed');
+  if (!existsSync(cacheDir)) {
+    return { installed: false, reason: 'cache dir missing — run `wigolo warmup --embeddings`' };
+  }
   try {
-    modelId = resolveModelId(getConfig().rerankerModel);
+    // First-run downloads create a model subdir with ONNX assets. Empty cache
+    // dir means the model has not been fetched yet.
+    const entries = readdirSync(cacheDir);
+    if (entries.length === 0) {
+      return { installed: false, reason: 'cache empty — run `wigolo warmup --embeddings`' };
+    }
+    return { installed: true };
   } catch (err) {
     return { installed: false, reason: err instanceof Error ? err.message : 'unknown error' };
-  }
-  const dir = join(dataDir, 'models', modelId);
-  const required = ['model_quantized.onnx', 'tokenizer.json', 'tokenizer_config.json'];
-  const missing = required.filter((f) => !existsSync(join(dir, f)));
-  if (missing.length > 0) {
-    return { installed: false, modelId, reason: `missing: ${missing.join(', ')}` };
-  }
-  try {
-    const docs = [
-      { text: 'React Server Components render on the server.' },
-      { text: 'Next.js App Router uses RSC by default.' },
-      { text: 'Bananas are a popular fruit.' },
-      { text: 'TypeScript adds static types to JavaScript.' },
-      { text: 'The capital of France is Paris.' },
-    ];
-    const t0 = Date.now();
-    await onnxRerank('react server components', docs, { modelId });
-    const rerankMs = Date.now() - t0;
-    return { installed: true, modelId, rerankMs };
-  } catch (err) {
-    return { installed: false, modelId, reason: err instanceof Error ? err.message : 'rerank failed' };
-  }
-}
-
-function checkRerankerPyPackages(pythonBin: string): {
-  ok: boolean;
-  tokenizers?: string;
-  onnxruntime?: string;
-} {
-  const tok = checkPyPackage('tokenizers', pythonBin);
-  const ort = checkPyPackage('onnxruntime', pythonBin);
-  return {
-    ok: tok.ok && ort.ok,
-    tokenizers: tok.version,
-    onnxruntime: ort.version,
-  };
-}
-
-function checkVenvStale(dataDir: string, _pythonBin: string): { stale: boolean; reason?: string } {
-  const cfgPath = join(dataDir, 'searxng', 'venv', 'pyvenv.cfg');
-  if (!existsSync(cfgPath)) return { stale: false };
-  try {
-    const cfg = readFileSync(cfgPath, 'utf-8');
-    const homeMatch = cfg.match(/home\s*=\s*(.+)$/m);
-    if (!homeMatch) return { stale: false };
-    const venvHome = homeMatch[1].trim();
-    if (!existsSync(venvHome)) return { stale: true, reason: `recorded home ${venvHome} does not exist` };
-    return { stale: false };
-  } catch {
-    return { stale: false };
   }
 }
 
@@ -139,6 +110,18 @@ function humanRetry(nextRetryAt?: string): string {
  *   search engine bootstrap failed/no_runtime, or search engine process supposed to be up but isn't.
  */
 export async function runDoctor(dataDir: string): Promise<number> {
+  // Doctor produces its own human-readable diagnostic — suppress info/debug
+  // logger noise from the modules it touches so the output stays clean.
+  // Warnings and errors still come through.
+  setLogSuppression('warn');
+  try {
+    return await runDoctorInner(dataDir);
+  } finally {
+    setLogSuppression(null);
+  }
+}
+
+async function runDoctorInner(dataDir: string): Promise<number> {
   let degraded = false;
 
   out(`[wigolo doctor] Data dir:        ${dataDir}`);
@@ -164,27 +147,19 @@ export async function runDoctor(dataDir: string): Promise<number> {
   }
 
   out('');
-  const pythonBin = getPythonBin(dataDir);
-  const traf = checkPyPackage('trafilatura', pythonBin);
-  const reranker = await checkOnnxReranker(dataDir);
+  const reranker = await checkReranker();
+  const embeddings = checkFastembedCache(dataDir);
   out('[wigolo doctor] Optional components:');
-  out(`  Content extractor:  ${traf.ok ? `installed (trafilatura${traf.version ? ` v${traf.version}` : ''})` : 'not installed'}`);
   if (reranker.installed) {
     const timing = reranker.rerankMs !== undefined ? ` — 5-doc rerank ${reranker.rerankMs}ms` : '';
-    out(`  ML reranker:        installed (onnx ${reranker.modelId})${timing}`);
+    out(`  ML reranker:        installed (${reranker.modelId})${timing}`);
   } else {
     out(`  ML reranker:        not installed${reranker.reason ? ` (${reranker.reason})` : ''}`);
   }
-
-  const pyPkgs = checkRerankerPyPackages(pythonBin);
-  const versionPart = pyPkgs.tokenizers && pyPkgs.onnxruntime
-    ? ` (tokenizers=${pyPkgs.tokenizers} onnxruntime=${pyPkgs.onnxruntime})`
-    : '';
-  out(`  Python reranker packages: ${pyPkgs.ok ? 'ok' : 'missing'}${versionPart}`);
-
-  const venvCheck = checkVenvStale(dataDir, pythonBin);
-  if (venvCheck.stale) {
-    out(`  Python reranker venv:    STALE — re-run "wigolo warmup --reranker" (${venvCheck.reason})`);
+  if (embeddings.installed) {
+    out(`  Embeddings model:   installed (fastembed BGE-small-en-v1.5)`);
+  } else {
+    out(`  Embeddings model:   not installed${embeddings.reason ? ` (${embeddings.reason})` : ''}`);
   }
 
   out('');
@@ -251,7 +226,121 @@ export async function runDoctor(dataDir: string): Promise<number> {
     out(`  - Force retry now: npx @staticn0va/wigolo warmup --force`);
   }
 
+  await checkV1Embeddings();
+  await checkSqliteVec(dataDir);
+  checkRssFeeds(dataDir);
+  checkTelemetryStatus();
+
   out('');
   out(`[wigolo doctor] Overall: ${degraded ? 'DEGRADED' : 'OK'}`);
   return degraded ? 1 : 0;
+}
+
+async function checkV1Embeddings(): Promise<void> {
+  out('');
+  out('[wigolo doctor] V1 embeddings:');
+  try {
+    const provider = await getEmbedProvider();
+    out(`  provider:      ready (fastembed ${provider.modelId}, dim=${provider.dim})`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    out(`  provider:      not ready (${msg.slice(0, 80)})`);
+  }
+}
+
+async function checkSqliteVec(dataDir: string): Promise<void> {
+  out('');
+  out('[wigolo doctor] V1 sqlite-vec:');
+  let opened = false;
+  try {
+    const db = initDatabase(join(dataDir, 'wigolo.db'));
+    opened = true;
+    try {
+      const row = db.prepare('SELECT vec_version() AS v').get() as { v?: string } | undefined;
+      const v = row?.v ?? 'unknown';
+      out(`  extension:     loaded (vec_version ${v})`);
+    } catch {
+      out('  extension:     not loaded (run warmup to load on next start)');
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    out(`  extension:     (check failed: ${msg.slice(0, 80)})`);
+  } finally {
+    if (opened) {
+      try { closeDatabase(); } catch { /* ignore */ }
+    }
+  }
+}
+
+function checkRssFeeds(dataDir: string): void {
+  out('');
+  out('[wigolo doctor] RSS feeds:');
+  try {
+    const { feeds } = loadFeedConfig({ dataDir });
+    if (feeds.length === 0) {
+      out('  feeds:         none configured (set WIGOLO_RSS_FEEDS to opt in)');
+      return;
+    }
+
+    let db: ReturnType<typeof initDatabase> | null = null;
+    try {
+      db = initDatabase(join(dataDir, 'wigolo.db'));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      out(`  feeds:         ${feeds.length} configured (db unreadable: ${msg.slice(0, 60)})`);
+      return;
+    }
+
+    let stmt: ReturnType<typeof db.prepare> | null = null;
+    try {
+      stmt = db.prepare(
+        'SELECT COUNT(*) AS n, MAX(fetched_at) AS last_at FROM feed_items WHERE feed_url = ?',
+      );
+    } catch {
+      // feed_items table missing — treat every feed as never polled.
+    }
+
+    try {
+      const now = Date.now();
+      for (const feed of feeds) {
+        let line: string;
+        if (!stmt) {
+          line = `  ${feed.url}  0 items [never polled]`;
+        } else {
+          try {
+            const row = stmt.get(feed.url) as { n?: number; last_at?: string | null } | undefined;
+            const n = row?.n ?? 0;
+            const lastAt = row?.last_at ?? null;
+            if (!lastAt) {
+              line = `  ${feed.url}  ${n} items [never polled]`;
+            } else {
+              const ageMs = now - new Date(lastAt).getTime();
+              const ageHr = ageMs / 3_600_000;
+              const fresh = ageHr <= 24 ? 'fresh' : 'stale';
+              const ageLabel = ageHr < 1
+                ? `${Math.max(0, Math.round(ageMs / 60_000))}m ago`
+                : `${Math.round(ageHr)}h ago`;
+              const day = lastAt.slice(0, 10);
+              line = `  ${feed.url}  ${n} items, last fetched ${day} (${ageLabel}) [${fresh}]`;
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            line = `  ${feed.url}  (check failed: ${msg.slice(0, 60)})`;
+          }
+        }
+        out(line);
+      }
+    } finally {
+      try { closeDatabase(); } catch { /* ignore */ }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    out(`  (check failed: ${msg.slice(0, 80)})`);
+  }
+}
+
+function checkTelemetryStatus(): void {
+  out('');
+  const state = isTelemetryEnabled() ? 'enabled' : 'disabled';
+  out(`[wigolo doctor] Telemetry: opt-in ${state} (WIGOLO_TELEMETRY=1 to opt in)`);
 }

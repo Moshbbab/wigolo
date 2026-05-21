@@ -27,23 +27,27 @@ vi.mock('../../../src/config.js', () => ({
   getConfig: vi.fn(() => ({ dataDir: '/tmp/test-wigolo' })),
 }));
 
-vi.mock('../../../src/search/reranker/download.js', () => ({
-  downloadModelAssets: vi.fn().mockResolvedValue({
-    modelPath: '/tmp/model.onnx',
-    tokenizerPath: '/tmp/tokenizer.json',
-    configPath: '/tmp/tokenizer_config.json',
-  }),
+const rerankMock = vi.fn().mockResolvedValue([{ id: '0', score: 0.5 }]);
+vi.mock('../../../src/providers/rerank-provider.js', () => ({
+  getRerankProvider: vi.fn(async () => ({
+    modelId: 'Xenova/ms-marco-MiniLM-L-6-v2',
+    rerank: rerankMock,
+  })),
 }));
 
-vi.mock('../../../src/search/reranker/onnx.js', () => ({
-  onnxRerank: vi.fn().mockResolvedValue([{ index: 0, score: 0.5 }]),
-}));
+vi.mock('../../../src/embedding/fastembed-provider.js', () => {
+  const FastembedEmbedProvider = vi.fn(function (this: Record<string, unknown>) {
+    this.modelId = 'BGE-small-en-v1.5';
+    this.dim = 384;
+    this.warmup = vi.fn().mockResolvedValue(undefined);
+    this.embed = vi.fn().mockResolvedValue([new Float32Array(384).fill(0.1)]);
+  });
+  return { FastembedEmbedProvider };
+});
 
 import { runCommand } from '../../../src/cli/tui/run-command.js';
 import { runWarmup } from '../../../src/cli/warmup.js';
 import { checkPythonAvailable, bootstrapNativeSearxng, getBootstrapState } from '../../../src/searxng/bootstrap.js';
-import { downloadModelAssets } from '../../../src/search/reranker/download.js';
-import { onnxRerank } from '../../../src/search/reranker/onnx.js';
 
 const ok = { code: 0, stdout: '', stderr: '', timedOut: false };
 const failWith = (msg: string) => ({ code: 1, stdout: '', stderr: msg, timedOut: false });
@@ -157,50 +161,6 @@ describe('runWarmup with flags', () => {
     expect(result.playwright).toBe('ok');
   });
 
-  it('installs trafilatura when --trafilatura flag is passed', async () => {
-    vi.mocked(getBootstrapState).mockReturnValue({ status: 'ready', searxngPath: '/tmp/searxng' });
-
-    await runWarmup(['--trafilatura']);
-
-    const calls = vi.mocked(runCommand).mock.calls;
-    const pipCall = calls.find((c) => includesArg(c, 'trafilatura'));
-    expect(pipCall).toBeDefined();
-    expect(argsOf(pipCall!)).toEqual(expect.arrayContaining(['-m', 'pip', 'install']));
-  });
-
-  it('installs trafilatura when --all flag is passed', async () => {
-    vi.mocked(getBootstrapState).mockReturnValue({ status: 'ready', searxngPath: '/tmp/searxng' });
-
-    await runWarmup(['--all']);
-
-    const calls = vi.mocked(runCommand).mock.calls;
-    const pipCall = calls.find((c) => includesArg(c, 'trafilatura'));
-    expect(pipCall).toBeDefined();
-  });
-
-  it('does not install trafilatura when no flag is passed', async () => {
-    vi.mocked(getBootstrapState).mockReturnValue({ status: 'ready', searxngPath: '/tmp/searxng' });
-
-    await runWarmup([]);
-
-    const calls = vi.mocked(runCommand).mock.calls;
-    const pipCall = calls.find((c) => includesArg(c, 'trafilatura'));
-    expect(pipCall).toBeUndefined();
-  });
-
-  it('handles trafilatura install failure gracefully', async () => {
-    vi.mocked(getBootstrapState).mockReturnValue({ status: 'ready', searxngPath: '/tmp/searxng' });
-
-    vi.mocked(runCommand).mockImplementation(async (_cmd, args) => {
-      if (args.some((a) => String(a).includes('trafilatura'))) {
-        return failWith('pip install failed: network error');
-      }
-      return ok;
-    });
-
-    const result = await runWarmup(['--trafilatura']);
-    expect(result.playwright).toBe('ok');
-  });
 });
 
 describe('warmup --reranker', () => {
@@ -208,88 +168,46 @@ describe('warmup --reranker', () => {
     vi.clearAllMocks();
     vi.mocked(runCommand).mockResolvedValue(ok);
     vi.mocked(getBootstrapState).mockReturnValue({ status: 'ready', searxngPath: '/tmp/searxng' });
-    vi.mocked(downloadModelAssets).mockResolvedValue({
-      modelPath: '/tmp/model.onnx',
-      tokenizerPath: '/tmp/tokenizer.json',
-      configPath: '/tmp/tokenizer_config.json',
-    });
-    vi.mocked(onnxRerank).mockResolvedValue([{ index: 0, score: 0.5 }]);
+    rerankMock.mockResolvedValue([{ id: '0', score: 0.5 }]);
   });
 
-  it('pip-installs tokenizers + onnxruntime when --reranker passed', async () => {
+  it('runs the rerank provider warmup when --reranker passed', async () => {
     const result = await runWarmup(['--reranker']);
 
-    const calls = vi.mocked(runCommand).mock.calls;
-    const tokCall = calls.find((c) => includesArg(c, 'tokenizers'));
-    const ortCall = calls.find((c) => includesArg(c, 'onnxruntime'));
-    expect(tokCall).toBeDefined();
-    expect(ortCall).toBeDefined();
-    expect(argsOf(tokCall!)).toEqual(expect.arrayContaining(['-m', 'pip', 'install']));
-    expect(downloadModelAssets).toHaveBeenCalled();
-    expect(onnxRerank).toHaveBeenCalled();
+    expect(rerankMock).toHaveBeenCalled();
     expect(result.reranker).toBe('ok');
   });
 
-  it('--all flag includes reranker installation', async () => {
+  it('--all flag includes reranker warmup', async () => {
     const result = await runWarmup(['--all']);
 
-    const calls = vi.mocked(runCommand).mock.calls;
-    const tokCall = calls.find((c) => includesArg(c, 'tokenizers'));
-    expect(tokCall).toBeDefined();
-    expect(downloadModelAssets).toHaveBeenCalled();
+    expect(rerankMock).toHaveBeenCalled();
     expect(result.reranker).toBe('ok');
   });
 
-  it('--all combines sentence-transformers into the reranker pip call (single resolver pass)', async () => {
+  it('--all does not pip-install any Python rerank packages', async () => {
     await runWarmup(['--all']);
 
     const calls = vi.mocked(runCommand).mock.calls;
-    const combinedCall = calls.find(
-      (c) =>
-        includesArg(c, 'tokenizers') &&
-        includesArg(c, 'onnxruntime') &&
-        includesArg(c, 'sentence-transformers'),
-    );
-    expect(combinedCall).toBeDefined();
-  });
-
-  it('reports failure when pip install fails', async () => {
-    vi.mocked(runCommand).mockImplementation(async (_cmd, args) => {
-      if (args.some((a) => String(a).includes('tokenizers'))) {
-        return failWith('pip resolver error');
-      }
-      return ok;
-    });
-
-    const result = await runWarmup(['--reranker']);
-
-    expect(result.reranker).toBe('failed');
-    expect(result.rerankerError).toContain('pip resolver error');
-    expect(downloadModelAssets).not.toHaveBeenCalled();
-  });
-
-  it('reports failure when download fails', async () => {
-    vi.mocked(downloadModelAssets).mockRejectedValueOnce(new Error('SHA-256 mismatch'));
-
-    const result = await runWarmup(['--reranker']);
-
-    expect(result.reranker).toBe('failed');
-    expect(result.rerankerError).toContain('SHA-256');
+    expect(calls.find((c) => includesArg(c, 'sentence-transformers'))).toBeUndefined();
+    expect(calls.find((c) => includesArg(c, 'tokenizers'))).toBeUndefined();
+    expect(calls.find((c) => includesArg(c, 'onnxruntime'))).toBeUndefined();
+    expect(calls.find((c) => includesArg(c, 'flashrank'))).toBeUndefined();
   });
 
   it('does not install reranker when flag not passed', async () => {
     const result = await runWarmup([]);
 
-    expect(downloadModelAssets).not.toHaveBeenCalled();
+    expect(rerankMock).not.toHaveBeenCalled();
     expect(result.reranker).toBeUndefined();
   });
 
-  it('reports failure when smoke rerank fails', async () => {
-    vi.mocked(onnxRerank).mockRejectedValueOnce(new Error('ONNX session init failed'));
+  it('reports failure when rerank provider warmup throws', async () => {
+    rerankMock.mockRejectedValueOnce(new Error('model load failed'));
 
     const result = await runWarmup(['--reranker']);
 
     expect(result.reranker).toBe('failed');
-    expect(result.rerankerError).toContain('ONNX session');
+    expect(result.rerankerError).toContain('model load failed');
   });
 });

@@ -1,21 +1,25 @@
 import { createLogger } from '../logger.js';
 import { decomposeQuestion, detectQueryType, extractComparisonEntities, type QueryType } from './decompose.js';
 import { synthesizeReport } from './synthesize.js';
+import { synthesizeLocal } from './synthesis-local.js';
 import { buildResearchBrief } from './brief.js';
 import { deduplicateResults } from '../search/dedup.js';
 import { rerankResults } from '../search/rerank.js';
 import { applyAllFilters } from '../search/filters.js';
-import { fanOutSearch } from '../search/multi-query.js';
-import { extractContent } from '../extraction/pipeline.js';
+import { exploreInParallel } from './branch-exploration.js';
+import type { RawSearchResult, SearchEngineOptions } from '../types.js';
+import { getExtractProvider } from '../providers/extract-provider.js';
 import { truncateSmartly } from '../search/truncate.js';
 import { cacheContent } from '../cache/store.js';
 import { getEmbeddingService } from '../embedding/embed.js';
 import { checkSamplingSupport, type SamplingCapableServer } from '../search/sampling.js';
+import { isLocalLlmEnabled } from '../extraction/v1/local-llm.js';
 import type {
   ResearchInput,
   ResearchOutput,
   ResearchSource,
   SearchEngine,
+  Citation,
 } from '../types.js';
 import type { SmartRouter } from '../fetch/router.js';
 
@@ -25,6 +29,20 @@ const DEPTH_CONFIG: Record<string, { subQueries: number; minSources: number; max
   quick: { subQueries: 2, minSources: 5, maxSources: 8 },
   standard: { subQueries: 4, minSources: 10, maxSources: 15 },
   comprehensive: { subQueries: 7, minSources: 20, maxSources: 25 },
+};
+
+// Per-depth budgets for the sub-query fan-out. exploreInParallel guarantees
+// a single slow sub-query can't burn the whole research budget — comprehensive
+// runs cap at ~60s total and 15s per sub-query.
+const SEARCH_TOTAL_BUDGET_MS: Record<string, number> = {
+  quick: 15_000,
+  standard: 30_000,
+  comprehensive: 60_000,
+};
+const SEARCH_PER_QUERY_BUDGET_MS: Record<string, number> = {
+  quick: 8_000,
+  standard: 10_000,
+  comprehensive: 15_000,
 };
 
 const PER_SOURCE_CHAR_CAP = 3000;
@@ -53,22 +71,66 @@ export async function runResearchPipeline(
     const queryType = decomposeResult.queryType;
     log.info('decomposition complete', { subQueryCount: subQueries.length, samplingUsed: decomposeResult.samplingUsed, queryType });
 
-    // Phase 2: Parallel search across sub-queries via multi-query fan-out
-    const { results: allRaw, enginesUsed: enginesUsedArr, errors: searchErrors } = await fanOutSearch(
+    // Phase 2: Parallel search across sub-queries with per-query + total
+    // budget enforcement via exploreInParallel. A single hung engine no
+    // longer wedges the whole research call — the per-query timer aborts
+    // it and the rest of the fan-out keeps going. Engine cap when
+    // sub-queries are many preserves the multi-query.ts invariant.
+    const effEngines = subQueries.length >= 3 && engines.length > 2 ? engines.slice(0, 2) : engines;
+    const perEngineMaxResults = Math.ceil(maxSources / subQueries.length) * 2;
+
+    const branchResults = await exploreInParallel(
       subQueries,
-      engines,
+      async (subQuery, signal) => {
+        const results: RawSearchResult[] = [];
+        const usedHere = new Set<string>();
+        const engineOpts: SearchEngineOptions = {
+          maxResults: perEngineMaxResults,
+          includeDomains: input.include_domains,
+          excludeDomains: input.exclude_domains,
+        };
+
+        await Promise.allSettled(
+          effEngines.map(async (engine) => {
+            if (signal.aborted) return;
+            try {
+              const rs = await engine.search(subQuery, engineOpts);
+              for (const r of rs) results.push(r);
+              usedHere.add(engine.name);
+            } catch (err) {
+              log.warn('research engine search failed', {
+                engine: engine.name,
+                query: subQuery,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }),
+        );
+
+        return { results, enginesUsed: [...usedHere] };
+      },
       {
-        maxResults: Math.ceil(maxSources / subQueries.length) * 2,
-        includeDomains: input.include_domains,
-        excludeDomains: input.exclude_domains,
+        maxConcurrent: 3,
+        totalBudgetMs: SEARCH_TOTAL_BUDGET_MS[depth] ?? SEARCH_TOTAL_BUDGET_MS.standard,
+        perQueryBudgetMs: SEARCH_PER_QUERY_BUDGET_MS[depth] ?? SEARCH_PER_QUERY_BUDGET_MS.standard,
       },
     );
 
+    const allRaw: RawSearchResult[] = [];
+    const enginesUsed = new Set<string>();
+    const searchErrors: string[] = [];
+    for (const br of branchResults) {
+      if (br.ok && br.result) {
+        allRaw.push(...br.result.results);
+        for (const e of br.result.enginesUsed) enginesUsed.add(e);
+      } else if (br.error) {
+        searchErrors.push(`${br.query}: ${br.error}`);
+      }
+    }
     if (searchErrors.length > 0) {
       log.warn('some search sub-queries failed', { errors: searchErrors });
     }
 
-    const enginesUsed = new Set<string>(enginesUsedArr);
     log.info('search phase complete', { totalRaw: allRaw.length, engines: [...enginesUsed] });
 
     // Phase 3: Deduplicate, filter, rerank
@@ -111,6 +173,41 @@ export async function runResearchPipeline(
     );
     log.info('synthesis complete', { samplingUsed: synthesisResult.samplingUsed, reportLength: synthesisResult.report.length });
 
+    // Phase 5b: Local-LLM synthesis fallback — only when host LLM did not
+    // produce output AND a local provider is configured. Failures fall through
+    // to the existing heuristic report in synthesisResult.
+    let finalReport = synthesisResult.report;
+    let finalCitations: Citation[] = synthesisResult.citations;
+    let localSynthesisText: string | undefined;
+    if (!synthesisResult.samplingUsed && isLocalLlmEnabled()) {
+      try {
+        const localSources = sources
+          .filter((s) => s.fetched && s.markdown_content.length > 0)
+          .map((s) => ({ url: s.url, title: s.title, markdown: s.markdown_content }));
+        if (localSources.length > 0) {
+          const local = await synthesizeLocal(input.question, localSources);
+          finalReport = local.text;
+          localSynthesisText = local.text;
+          finalCitations = local.citations
+            .filter((idx) => idx >= 0 && idx < localSources.length)
+            .map((idx) => {
+              const s = localSources[idx];
+              return {
+                index: idx + 1,
+                url: s.url,
+                title: s.title,
+                snippet: s.markdown.slice(0, 200),
+              };
+            });
+          log.info('local synthesis succeeded', { reportLength: finalReport.length });
+        }
+      } catch (err) {
+        log.warn('local LLM synthesis failed; using heuristic fallback', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     // Phase 6: Structured brief — populated when internal sampling is
     // unavailable so the host LLM has well-shaped data to write the report
     // from without re-reading raw markdown.
@@ -126,12 +223,13 @@ export async function runResearchPipeline(
           TOTAL_SOURCES_CHAR_CAP,
           queryType,
           comparisonEntities,
+          localSynthesisText,
         )
       : undefined;
 
     return {
-      report: synthesisResult.report,
-      citations: synthesisResult.citations,
+      report: finalReport,
+      citations: finalCitations,
       sources,
       sub_queries: subQueries,
       depth,
@@ -179,7 +277,8 @@ async function fetchSources(
         ),
       ]);
 
-      const extraction = await extractContent(raw.html, raw.finalUrl, {
+      const extractor = await getExtractProvider();
+      const extraction = await extractor.extract(raw.html, raw.finalUrl, {
         maxChars: 30000,
         contentType: raw.contentType,
       });

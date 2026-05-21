@@ -2,16 +2,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { SearchEngine, RawSearchResult, ResearchInput } from '../../../src/types.js';
 import type { SmartRouter } from '../../../src/fetch/router.js';
 
-vi.mock('../../../src/extraction/pipeline.js', () => ({
-  extractContent: vi.fn().mockResolvedValue({
-    title: 'Extracted Title',
-    markdown: '# Extracted Content\n\nArticle content about the topic.',
-    metadata: {},
-    links: [],
-    images: [],
-    extractor: 'defuddle' as const,
-  }),
+const extractMock = vi.fn().mockResolvedValue({
+  title: 'Extracted Title',
+  markdown: '# Extracted Content\n\nArticle content about the topic.',
+  metadata: {},
+  links: [],
+  images: [],
+  extractor: 'defuddle' as const,
+});
+vi.mock('../../../src/providers/extract-provider.js', () => ({
+  getExtractProvider: vi.fn(async () => ({
+    name: 'v1' as const,
+    extract: extractMock,
+  })),
+  _resetExtractProviderForTest: vi.fn(),
 }));
+
 
 vi.mock('../../../src/cache/store.js', () => ({
   cacheContent: vi.fn(),

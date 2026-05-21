@@ -6,17 +6,23 @@ import { countTokens } from '../../src/search/tokens.js';
 import { initDatabase, closeDatabase } from '../../src/cache/db.js';
 import { resetConfig } from '../../src/config.js';
 
-vi.mock('../../src/extraction/pipeline.js', () => ({
-  extractContent: vi.fn().mockResolvedValue({
-    title: 'Mock Title',
-    markdown:
-      '# Rust Async Guide\n\nRust async functions return futures that are evaluated lazily. The async/await syntax provides ergonomic concurrency without runtime overhead. Tokio is the most widely used async runtime in the Rust ecosystem and integrates with the futures crate.\n\n## Tokio runtime\n\nTokio provides a multi-threaded scheduler and a single-threaded scheduler suitable for IO-bound workloads. Tasks are spawned with tokio::spawn and run cooperatively until they yield at an await point.',
-    metadata: {},
-    links: [],
-    images: [],
-    extractor: 'defuddle' as const,
-  }),
+const extractMock = vi.fn().mockResolvedValue({
+  title: 'Mock Title',
+  markdown:
+    '# Rust Async Guide\n\nRust async functions return futures that are evaluated lazily. The async/await syntax provides ergonomic concurrency without runtime overhead. Tokio is the most widely used async runtime in the Rust ecosystem and integrates with the futures crate.\n\n## Tokio runtime\n\nTokio provides a multi-threaded scheduler and a single-threaded scheduler suitable for IO-bound workloads. Tasks are spawned with tokio::spawn and run cooperatively until they yield at an await point.',
+  metadata: {},
+  links: [],
+  images: [],
+  extractor: 'defuddle' as const,
+});
+vi.mock('../../src/providers/extract-provider.js', () => ({
+  getExtractProvider: vi.fn(async () => ({
+    name: 'v1' as const,
+    extract: extractMock,
+  })),
+  _resetExtractProviderForTest: vi.fn(),
 }));
+
 
 vi.mock('../../src/embedding/embed.js', () => ({
   getEmbeddingService: () => ({

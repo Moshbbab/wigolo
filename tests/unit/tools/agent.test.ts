@@ -1,15 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../../../src/extraction/pipeline.js', () => ({
-  extractContent: vi.fn().mockResolvedValue({
-    title: 'Default Title',
-    markdown: '# Default\n\nDefault extracted content.',
-    metadata: {},
-    links: [],
-    images: [],
-    extractor: 'defuddle' as const,
-  }),
+const extractMock = vi.fn().mockResolvedValue({
+  title: 'Default Title',
+  markdown: '# Default\n\nDefault extracted content.',
+  metadata: {},
+  links: [],
+  images: [],
+  extractor: 'defuddle' as const,
+});
+vi.mock('../../../src/providers/extract-provider.js', () => ({
+  getExtractProvider: vi.fn(async () => ({
+    name: 'v1' as const,
+    extract: extractMock,
+  })),
+  _resetExtractProviderForTest: vi.fn(),
 }));
+
 
 import { handleAgent } from '../../../src/tools/agent.js';
 import type { SearchEngine, RawSearchResult, AgentInput } from '../../../src/types.js';
@@ -245,8 +251,7 @@ describe('handleAgent', () => {
     } as unknown as SmartRouter;
 
     it('default response (no schema) populates evidence and strips source markdown_content', async () => {
-      const { extractContent } = await import('../../../src/extraction/pipeline.js');
-      vi.mocked(extractContent).mockResolvedValue({
+      extractMock.mockResolvedValue({
         title: 'Topic',
         markdown: longMd,
         metadata: {},
@@ -275,8 +280,7 @@ describe('handleAgent', () => {
     });
 
     it('include_full_markdown=true preserves source markdown_content', async () => {
-      const { extractContent } = await import('../../../src/extraction/pipeline.js');
-      vi.mocked(extractContent).mockResolvedValue({
+      extractMock.mockResolvedValue({
         title: 'Topic',
         markdown: longMd,
         metadata: {},
@@ -300,8 +304,7 @@ describe('handleAgent', () => {
     });
 
     it('schema path leaves evidence absent', async () => {
-      const { extractContent } = await import('../../../src/extraction/pipeline.js');
-      vi.mocked(extractContent).mockResolvedValue({
+      extractMock.mockResolvedValue({
         title: 'Topic',
         markdown: longMd,
         metadata: {},

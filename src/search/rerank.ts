@@ -1,5 +1,5 @@
 import type { MergedSearchResult } from './dedup.js';
-import { onnxRerank } from './reranker/onnx.js';
+import { getRerankProvider } from '../providers/rerank-provider.js';
 import { applyRecencyBoost } from './reranker/recency-boost.js';
 import { applyAuthorityBoost } from './reranker/authority-boost.js';
 import { applyConsensusBoost } from './reranker/consensus-boost.js';
@@ -19,16 +19,23 @@ export async function rerankResults(
 
   if (config.reranker === 'onnx') {
     try {
-      const passages = results.map((r) => ({ text: `${r.title}\n${r.snippet}` }));
-      const ranked = await onnxRerank(query, passages, { modelId: config.rerankerModel });
-      const reordered = ranked.map((s) => ({ ...results[s.index], relevance_score: s.score }));
+      const provider = await getRerankProvider();
+      const candidates = results.map((r, i) => ({
+        id: String(i),
+        text: `${r.title}\n${r.snippet}`,
+      }));
+      const ranked = await provider.rerank(query, candidates);
+      const reordered = ranked.map((s) => ({
+        ...results[Number(s.id)],
+        relevance_score: s.score,
+      }));
       const consensusBoosted = applyConsensusBoost(reordered);
       const authorityBoosted = applyAuthorityBoost(query, consensusBoosted);
       const boosted = applyRecencyBoost(query, authorityBoosted);
       boosted.sort((a, b) => b.relevance_score - a.relevance_score);
       return applyThreshold(boosted, config.relevanceThreshold);
     } catch (err) {
-      log.warn('ONNX rerank failed, falling back to passthrough', { error: String(err) });
+      log.warn('Rerank failed, falling back to passthrough', { error: String(err) });
     }
   } else if (config.reranker !== 'none') {
     log.warn('Unknown reranker configured, passing through', { reranker: config.reranker });

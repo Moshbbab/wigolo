@@ -7,16 +7,22 @@ import { initDatabase, closeDatabase } from '../../../src/cache/db.js';
 import { cacheSearchResults } from '../../../src/cache/store.js';
 import { expandIfSingle } from '../../../src/search/multi-query.js';
 
-vi.mock('../../../src/extraction/pipeline.js', () => ({
-  extractContent: vi.fn().mockResolvedValue({
-    title: 'Mock Title',
-    markdown: '# Mock Content\n\nSome extracted content here.',
-    metadata: {},
-    links: [],
-    images: [],
-    extractor: 'defuddle' as const,
-  }),
+const extractMock = vi.fn().mockResolvedValue({
+  title: 'Mock Title',
+  markdown: '# Mock Content\n\nSome extracted content here.',
+  metadata: {},
+  links: [],
+  images: [],
+  extractor: 'defuddle' as const,
+});
+vi.mock('../../../src/providers/extract-provider.js', () => ({
+  getExtractProvider: vi.fn(async () => ({
+    name: 'v1' as const,
+    extract: extractMock,
+  })),
+  _resetExtractProviderForTest: vi.fn(),
 }));
+
 
 describe('handleSearch', () => {
   const originalEnv = process.env;
@@ -113,8 +119,7 @@ describe('handleSearch', () => {
       }),
     } as unknown as SmartRouter;
 
-    const { extractContent } = await import('../../../src/extraction/pipeline.js');
-    vi.mocked(extractContent).mockResolvedValue({
+    extractMock.mockResolvedValue({
       title: 'Big',
       markdown: 'x'.repeat(60000),
       metadata: {},

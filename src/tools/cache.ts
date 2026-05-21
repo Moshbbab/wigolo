@@ -1,11 +1,24 @@
-import { searchCacheFiltered, getCacheStats, clearCacheEntries } from '../cache/store.js';
+import {
+  searchCacheFiltered,
+  getCacheStats,
+  clearCacheEntries,
+  ftsSearchRanked,
+  getCachedContentByNormalizedUrl,
+} from '../cache/store.js';
 import { detectChange } from '../cache/change-detector.js';
-import { extractContent } from '../extraction/pipeline.js';
+import { getExtractProvider } from '../providers/extract-provider.js';
+import { reciprocalRankFusion, sortByRRFScore, buildRankMap } from '../search/rrf.js';
+import { getEmbedProvider } from '../providers/embed-provider.js';
+import { getVectorStore } from '../providers/vector-store.js';
 import { createLogger } from '../logger.js';
-import type { CacheInput, CacheOutput, ChangeReport } from '../types.js';
+import type { CacheInput, CacheOutput, CacheResultItem, ChangeReport } from '../types.js';
 import type { SmartRouter } from '../fetch/router.js';
 
 const log = createLogger('cache');
+
+const DEFAULT_HYBRID_LIMIT = 20;
+const HYBRID_CANDIDATE_FLOOR = 50;
+const HYBRID_CANDIDATE_FACTOR = 5;
 
 export async function handleCache(input: CacheInput, router?: SmartRouter): Promise<CacheOutput> {
   try {
@@ -35,7 +48,8 @@ export async function handleCache(input: CacheInput, router?: SmartRouter): Prom
             continue;
           }
           const raw = await router.fetch(entry.url, { renderJs: 'auto' });
-          const extraction = await extractContent(raw.html, raw.finalUrl, {
+          const extractor = await getExtractProvider();
+          const extraction = await extractor.extract(raw.html, raw.finalUrl, {
             contentType: raw.contentType,
           });
           const changeResult = detectChange(entry.url, extraction.markdown);
@@ -87,10 +101,21 @@ export async function handleCache(input: CacheInput, router?: SmartRouter): Prom
       return { cleared: count };
     }
 
+    if (input.mode === 'hybrid' && input.query) {
+      log.debug('Cache hybrid search', {
+        query: input.query,
+        limit: input.limit,
+      });
+      const results = await runHybridSearch(input);
+      if (results !== null) return { results };
+      // fall through to FTS-only when hybrid was unavailable
+    }
+
     log.debug('Cache search', {
       query: input.query,
       urlPattern: input.url_pattern,
       since: input.since,
+      mode: input.mode,
     });
     const results = searchCacheFiltered({
       query: input.query,
@@ -110,4 +135,74 @@ export async function handleCache(input: CacheInput, router?: SmartRouter): Prom
     log.error('Cache tool error', { error: String(err) });
     return { error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * Hybrid FTS5 + vector search fused with reciprocal rank fusion.
+ *
+ * Pulls `max(limit*5, 50)` candidates from each ranking, fuses with RRF
+ * (k=60), then hydrates the top `limit` into cache rows. Returns `null`
+ * when the vector path is unavailable so the caller falls back to FTS-only.
+ */
+async function runHybridSearch(input: CacheInput): Promise<CacheResultItem[] | null> {
+  const query = input.query ?? '';
+  const limit = Math.max(1, input.limit ?? DEFAULT_HYBRID_LIMIT);
+  const candidateLimit = Math.max(HYBRID_CANDIDATE_FLOOR, limit * HYBRID_CANDIDATE_FACTOR);
+
+  let embedProvider;
+  let store;
+  try {
+    [embedProvider, store] = await Promise.all([getEmbedProvider(), getVectorStore()]);
+  } catch (err) {
+    log.warn('hybrid search unavailable — embed/vector provider failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+
+  const indexSize = await store.size();
+  if (indexSize === 0) {
+    log.debug('hybrid search skipped — vector index empty');
+    return null;
+  }
+
+  let queryVectors: Float32Array[];
+  try {
+    queryVectors = await embedProvider.embed([query]);
+  } catch (err) {
+    log.warn('hybrid search aborted — query embedding failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+  const queryVector = queryVectors[0];
+  if (!queryVector || queryVector.length === 0) return null;
+
+  const [ftsHits, vecHits] = await Promise.all([
+    Promise.resolve(ftsSearchRanked(query, candidateLimit)),
+    store.search(queryVector, candidateLimit),
+  ]);
+
+  const ftsRankMap = buildRankMap(ftsHits.map(h => h.url));
+  const vecRankMap = buildRankMap(vecHits.map(h => h.metadata.url));
+
+  if (ftsRankMap.size === 0 && vecRankMap.size === 0) return [];
+
+  const fused = reciprocalRankFusion([ftsRankMap, vecRankMap], 60);
+  const ordered = sortByRRFScore(fused);
+
+  const results: CacheResultItem[] = [];
+  for (const [normalizedUrl] of ordered) {
+    if (results.length >= limit) break;
+    const cached = getCachedContentByNormalizedUrl(normalizedUrl);
+    if (!cached) continue;
+    results.push({
+      url: cached.url,
+      title: cached.title,
+      markdown: cached.markdown,
+      fetched_at: cached.fetchedAt,
+    });
+  }
+
+  return results;
 }

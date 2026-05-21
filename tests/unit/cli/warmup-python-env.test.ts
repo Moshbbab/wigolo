@@ -22,17 +22,24 @@ vi.mock('../../../src/searxng/bootstrap.js', () => ({
   bootstrapNativeSearxng: vi.fn(),
 }));
 
-vi.mock('../../../src/search/reranker/download.js', () => ({
-  downloadModelAssets: vi.fn().mockResolvedValue({
-    modelPath: '/tmp/model.onnx',
-    tokenizerPath: '/tmp/tokenizer.json',
-    configPath: '/tmp/tokenizer_config.json',
-  }),
+vi.mock('../../../src/providers/rerank-provider.js', () => ({
+  getRerankProvider: vi.fn(async () => ({
+    modelId: 'Xenova/ms-marco-MiniLM-L-6-v2',
+    rerank: vi.fn().mockResolvedValue([{ id: '0', score: 0.5 }]),
+  })),
 }));
 
-vi.mock('../../../src/search/reranker/onnx.js', () => ({
-  onnxRerank: vi.fn().mockResolvedValue([{ index: 0, score: 0.5 }]),
-}));
+const fastembedWarmup = vi.fn().mockResolvedValue(undefined);
+const fastembedEmbed = vi.fn().mockResolvedValue([new Float32Array(384).fill(0.1)]);
+vi.mock('../../../src/embedding/fastembed-provider.js', () => {
+  const FastembedEmbedProvider = vi.fn(function (this: Record<string, unknown>) {
+    this.modelId = 'BGE-small-en-v1.5';
+    this.dim = 384;
+    this.warmup = fastembedWarmup;
+    this.embed = fastembedEmbed;
+  });
+  return { FastembedEmbedProvider };
+});
 
 import { existsSync } from 'node:fs';
 import { runCommand } from '../../../src/cli/tui/run-command.js';
@@ -56,51 +63,27 @@ describe('warmup uses venv python', () => {
     delete process.env.WIGOLO_DATA_DIR;
   });
 
-  it('installs trafilatura via venv python when venv exists', async () => {
-    vi.mocked(existsSync).mockImplementation((p) => String(p) === VENV_PYTHON);
-
-    await runWarmup(['--trafilatura']);
-
-    const trafCall = pipCallFor('trafilatura');
-    expect(trafCall).toBeDefined();
-    expect(trafCall![0]).toBe(VENV_PYTHON);
-    expect(trafCall![1]).toEqual(expect.arrayContaining(['-m', 'pip', 'install']));
-  });
-
-  it('--reranker pip-installs tokenizers + onnxruntime via venv python', async () => {
+  it('--reranker does not pip-install any Python packages (cross-encoder is in-process)', async () => {
     vi.mocked(existsSync).mockImplementation((p) => String(p) === VENV_PYTHON);
 
     await runWarmup(['--reranker']);
 
-    const tokCall = pipCallFor('tokenizers');
-    const ortCall = pipCallFor('onnxruntime');
-    expect(tokCall).toBeDefined();
-    expect(ortCall).toBeDefined();
-    expect(tokCall![0]).toBe(VENV_PYTHON);
-    expect(tokCall![1]).toEqual(expect.arrayContaining(['-m', 'pip', 'install']));
+    expect(pipCallFor('tokenizers')).toBeUndefined();
+    expect(pipCallFor('onnxruntime')).toBeUndefined();
     expect(pipCallFor('flashrank')).toBeUndefined();
   });
 
-  it('installs sentence-transformers via venv python when venv exists', async () => {
+  it('warms up the fastembed embedding model when --embeddings is passed', async () => {
     vi.mocked(existsSync).mockImplementation((p) => String(p) === VENV_PYTHON);
 
     await runWarmup(['--embeddings']);
 
-    const st = pipCallFor('sentence-transformers');
-    expect(st).toBeDefined();
-    expect(st![0]).toBe(VENV_PYTHON);
+    // fastembed is native; there should be no pip call for sentence-transformers.
+    expect(pipCallFor('sentence-transformers')).toBeUndefined();
+    expect(fastembedWarmup).toHaveBeenCalled();
+    expect(fastembedEmbed).toHaveBeenCalled();
   });
 
-  it('falls back to system python3 when venv does not exist', async () => {
-    vi.mocked(existsSync).mockReturnValue(false);
-
-    await runWarmup(['--trafilatura']);
-
-    const trafCall = pipCallFor('trafilatura');
-    expect(trafCall).toBeDefined();
-    expect(trafCall![0]).toBe('python3');
-    expect(trafCall![1]).toEqual(expect.arrayContaining(['-m', 'pip', 'install']));
-  });
 });
 
 describe('warmup Lightpanda URL', () => {

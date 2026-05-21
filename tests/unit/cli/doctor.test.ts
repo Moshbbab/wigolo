@@ -10,19 +10,49 @@ vi.mock('node:fs', async () => {
     readFileSync: vi.fn(),
   };
 });
-vi.mock('../../../src/search/reranker/onnx.js', () => ({
-  onnxRerank: vi.fn().mockResolvedValue([{ index: 0, score: 0.9 }]),
+vi.mock('../../../src/providers/rerank-provider.js', () => ({
+  getRerankProvider: vi.fn(async () => ({
+    modelId: 'Xenova/ms-marco-MiniLM-L-6-v2',
+    rerank: vi.fn().mockResolvedValue([{ id: '0', score: 0.9 }]),
+  })),
+}));
+vi.mock('../../../src/providers/embed-provider.js', () => ({
+  getEmbedProvider: vi.fn(async () => ({
+    modelId: 'BAAI/bge-small-en-v1.5',
+    dim: 384,
+    embed: vi.fn(),
+  })),
+}));
+vi.mock('../../../src/cache/db.js', () => {
+  const db = {
+    prepare: vi.fn((sql: string) => {
+      if (typeof sql === 'string' && sql.includes('vec_version')) {
+        return { get: vi.fn(() => ({ v: '0.1.7-alpha.2' })) };
+      }
+      // feed_items lookup — default to empty.
+      return { get: vi.fn(() => ({ n: 0, last_at: null })) };
+    }),
+  };
+  return {
+    initDatabase: vi.fn(() => db),
+    closeDatabase: vi.fn(),
+    getDatabase: vi.fn(() => db),
+    isVecExtensionLoaded: vi.fn(() => true),
+  };
+});
+vi.mock('../../../src/search/v1/rss/feed-config.js', () => ({
+  loadFeedConfig: vi.fn(() => ({ feeds: [], sources: [] })),
 }));
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { runDoctor } from '../../../src/cli/doctor.js';
+import { getEmbedProvider } from '../../../src/providers/embed-provider.js';
+import { initDatabase } from '../../../src/cache/db.js';
+import { loadFeedConfig } from '../../../src/search/v1/rss/feed-config.js';
 
 function okProc(stdout = ''): ReturnType<typeof spawnSync> {
   return { status: 0, stdout, stderr: '', signal: null, pid: 1, output: [], error: undefined } as ReturnType<typeof spawnSync>;
-}
-function failProc(): ReturnType<typeof spawnSync> {
-  return { status: 1, stdout: '', stderr: 'not found', signal: null, pid: 1, output: [], error: new Error('ENOENT') } as ReturnType<typeof spawnSync>;
 }
 
 describe('runDoctor', () => {
@@ -70,23 +100,6 @@ describe('runDoctor', () => {
     expect(outBuffer).toMatch(/Overall: DEGRADED/);
   });
 
-  it('exits 0 when only optional packages missing', async () => {
-    vi.mocked(spawnSync).mockImplementation((cmd, args) => {
-      const joined = [cmd, ...((args ?? []) as string[])].join(' ');
-      if (joined.includes('trafilatura')) return failProc();
-      return okProc('Python 3.12.4');
-    });
-    vi.mocked(existsSync).mockReturnValue(true);
-    vi.mocked(readFileSync).mockImplementation((p) => {
-      const s = String(p);
-      if (s.endsWith('state.json')) return JSON.stringify({ status: 'ready', searxngPath: '/tmp/searxng' });
-      if (s.endsWith('searxng.lock')) return JSON.stringify({ pid: process.pid, port: 8888 });
-      return '';
-    });
-    const code = await runDoctor('/tmp/.wigolo');
-    expect(code).toBe(0);
-  });
-
   it('exits 1 when Playwright is installed but chromium browser is missing', async () => {
     vi.mocked(spawnSync).mockImplementation((cmd, args) => {
       const joined = [cmd, ...((args ?? []) as string[])].join(' ');
@@ -113,82 +126,6 @@ describe('runDoctor', () => {
     const code = await runDoctor('/tmp/.wigolo');
     expect(code).toBe(1);
     expect(outBuffer).toContain('not bootstrapped');
-  });
-
-  describe('Python reranker packages section', () => {
-    it('reports "ok" with versions when tokenizers + onnxruntime importable', async () => {
-      vi.mocked(spawnSync).mockImplementation((cmd, args) => {
-        const joined = [cmd, ...((args ?? []) as string[])].join(' ');
-        if (joined.includes('import tokenizers; print')) return okProc('0.20.3\n');
-        if (joined.includes('import onnxruntime; print')) return okProc('1.20.1\n');
-        if (joined.includes('import tokenizers')) return okProc('');
-        if (joined.includes('import onnxruntime')) return okProc('');
-        return okProc('Python 3.12.4');
-      });
-      vi.mocked(existsSync).mockReturnValue(true);
-      vi.mocked(readFileSync).mockImplementation((p) => {
-        const s = String(p);
-        if (s.endsWith('state.json')) return JSON.stringify({ status: 'ready', searxngPath: '/tmp/searxng' });
-        if (s.endsWith('searxng.lock')) return JSON.stringify({ pid: process.pid, port: 8888 });
-        return '';
-      });
-      await runDoctor('/tmp/.wigolo');
-      expect(outBuffer).toMatch(/Python reranker packages:\s+ok/);
-      expect(outBuffer).toMatch(/tokenizers=0\.20\.3/);
-      expect(outBuffer).toMatch(/onnxruntime=1\.20\.1/);
-    });
-
-    it('reports "missing" when tokenizers cannot be imported', async () => {
-      vi.mocked(spawnSync).mockImplementation((cmd, args) => {
-        const joined = [cmd, ...((args ?? []) as string[])].join(' ');
-        if (joined.includes('import tokenizers')) return failProc();
-        return okProc('Python 3.12.4');
-      });
-      vi.mocked(existsSync).mockReturnValue(true);
-      vi.mocked(readFileSync).mockImplementation((p) => {
-        const s = String(p);
-        if (s.endsWith('state.json')) return JSON.stringify({ status: 'ready', searxngPath: '/tmp/searxng' });
-        if (s.endsWith('searxng.lock')) return JSON.stringify({ pid: process.pid, port: 8888 });
-        return '';
-      });
-      await runDoctor('/tmp/.wigolo');
-      expect(outBuffer).toMatch(/Python reranker packages:\s+missing/);
-    });
-
-    it('flags venv as stale when pyvenv.cfg references a missing python home', async () => {
-      vi.mocked(spawnSync).mockImplementation(() => okProc('Python 3.12.4'));
-      vi.mocked(existsSync).mockImplementation((p) => {
-        const s = String(p);
-        if (s.endsWith('pyvenv.cfg')) return true;
-        if (s === '/opt/missing-python/bin') return false;
-        return true;
-      });
-      vi.mocked(readFileSync).mockImplementation((p) => {
-        const s = String(p);
-        if (s.endsWith('pyvenv.cfg')) return 'home = /opt/missing-python/bin\nversion = 3.12.4\n';
-        if (s.endsWith('state.json')) return JSON.stringify({ status: 'ready', searxngPath: '/tmp/searxng' });
-        if (s.endsWith('searxng.lock')) return JSON.stringify({ pid: process.pid, port: 8888 });
-        return '';
-      });
-      await runDoctor('/tmp/.wigolo');
-      expect(outBuffer).toMatch(/Python reranker venv:\s+STALE/);
-      expect(outBuffer).toContain('/opt/missing-python/bin');
-      expect(outBuffer).toContain('warmup --reranker');
-    });
-
-    it('does not flag venv as stale when home exists', async () => {
-      vi.mocked(spawnSync).mockImplementation(() => okProc('Python 3.12.4'));
-      vi.mocked(existsSync).mockReturnValue(true);
-      vi.mocked(readFileSync).mockImplementation((p) => {
-        const s = String(p);
-        if (s.endsWith('pyvenv.cfg')) return 'home = /usr/local/opt/python/bin\nversion = 3.12.4\n';
-        if (s.endsWith('state.json')) return JSON.stringify({ status: 'ready', searxngPath: '/tmp/searxng' });
-        if (s.endsWith('searxng.lock')) return JSON.stringify({ pid: process.pid, port: 8888 });
-        return '';
-      });
-      await runDoctor('/tmp/.wigolo');
-      expect(outBuffer).not.toMatch(/Python reranker venv:\s+STALE/);
-    });
   });
 
   describe('LLM fallback section', () => {
@@ -243,6 +180,103 @@ describe('runDoctor', () => {
       expect(outBuffer).toMatch(/WIGOLO_LLM_PROVIDER=gemini/);
       expect(outBuffer).toMatch(/cache TTL:\s+14 days/);
       expect(outBuffer).toMatch(/per-request:\s+3 call/);
+    });
+  });
+
+  describe('V1 extension checks', () => {
+    beforeEach(() => {
+      vi.mocked(spawnSync).mockImplementation(() => okProc('Python 3.12.4'));
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFileSync).mockImplementation((p) => {
+        const s = String(p);
+        if (s.endsWith('state.json')) return JSON.stringify({ status: 'ready', searxngPath: '/tmp/sx' });
+        if (s.endsWith('searxng.lock')) return JSON.stringify({ pid: process.pid, port: 8888 });
+        return '';
+      });
+    });
+
+    it('reports embedding provider ready with model id and dim', async () => {
+      await runDoctor('/tmp/.wigolo');
+      expect(outBuffer).toMatch(/V1 embeddings:/);
+      expect(outBuffer).toMatch(/provider:\s+ready \(fastembed BAAI\/bge-small-en-v1\.5, dim=384\)/);
+    });
+
+    it('reports embedding provider not ready on failure', async () => {
+      vi.mocked(getEmbedProvider).mockRejectedValueOnce(new Error('model download failed'));
+      await runDoctor('/tmp/.wigolo');
+      expect(outBuffer).toMatch(/provider:\s+not ready \(model download failed\)/);
+      // Failure must not flip overall to DEGRADED on its own.
+      expect(outBuffer).toMatch(/Overall: OK/);
+    });
+
+    it('reports sqlite-vec extension loaded with version', async () => {
+      await runDoctor('/tmp/.wigolo');
+      expect(outBuffer).toMatch(/V1 sqlite-vec:/);
+      expect(outBuffer).toMatch(/extension:\s+loaded \(vec_version 0\.1\.7-alpha\.2\)/);
+    });
+
+    it('reports sqlite-vec extension not loaded when vec_version throws', async () => {
+      vi.mocked(initDatabase).mockReturnValueOnce({
+        prepare: () => ({ get: () => { throw new Error('no such function: vec_version'); } }),
+      } as unknown as ReturnType<typeof initDatabase>);
+      await runDoctor('/tmp/.wigolo');
+      expect(outBuffer).toMatch(/extension:\s+not loaded/);
+      expect(outBuffer).toMatch(/Overall: OK/);
+    });
+
+    it('reports no RSS feeds when none configured', async () => {
+      await runDoctor('/tmp/.wigolo');
+      expect(outBuffer).toMatch(/RSS feeds:/);
+      expect(outBuffer).toMatch(/feeds:\s+none configured \(set WIGOLO_RSS_FEEDS to opt in\)/);
+    });
+
+    it('reports configured feeds with item counts and freshness', async () => {
+      const fresh = new Date(Date.now() - 3 * 3600_000).toISOString();
+      const stale = new Date(Date.now() - 30 * 3600_000).toISOString();
+      vi.mocked(loadFeedConfig).mockReturnValueOnce({
+        feeds: [
+          { url: 'https://example.com/rss' },
+          { url: 'https://stale.example/feed' },
+          { url: 'https://empty.example/feed' },
+        ],
+        sources: ['env'],
+      });
+      const feedDb = {
+        prepare: (sql: string) => {
+          if (sql.includes('vec_version')) {
+            return { get: () => ({ v: '0.1.7-alpha.2' }) };
+          }
+          return {
+            get: (url: string) => {
+              if (url === 'https://example.com/rss') return { n: 3, last_at: fresh };
+              if (url === 'https://stale.example/feed') return { n: 12, last_at: stale };
+              return { n: 0, last_at: null };
+            },
+          };
+        },
+      };
+      vi.mocked(initDatabase).mockReturnValue(feedDb as unknown as ReturnType<typeof initDatabase>);
+
+      await runDoctor('/tmp/.wigolo');
+      expect(outBuffer).toMatch(/https:\/\/example\.com\/rss\s+3 items.*\[fresh\]/);
+      expect(outBuffer).toMatch(/https:\/\/stale\.example\/feed\s+12 items.*\[stale\]/);
+      expect(outBuffer).toMatch(/https:\/\/empty\.example\/feed\s+0 items \[never polled\]/);
+    });
+
+    it('reports telemetry disabled by default', async () => {
+      delete process.env.WIGOLO_TELEMETRY;
+      await runDoctor('/tmp/.wigolo');
+      expect(outBuffer).toMatch(/Telemetry: opt-in disabled \(WIGOLO_TELEMETRY=1/);
+    });
+
+    it('reports telemetry enabled when WIGOLO_TELEMETRY=1', async () => {
+      process.env.WIGOLO_TELEMETRY = '1';
+      try {
+        await runDoctor('/tmp/.wigolo');
+      } finally {
+        delete process.env.WIGOLO_TELEMETRY;
+      }
+      expect(outBuffer).toMatch(/Telemetry: opt-in enabled/);
     });
   });
 });

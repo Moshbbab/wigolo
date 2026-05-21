@@ -7,8 +7,13 @@ vi.mock('../../../src/cache/store.js', () => ({
   isCacheUsable: vi.fn(),
 }));
 
-vi.mock('../../../src/extraction/pipeline.js', () => ({
-  extractContent: vi.fn(),
+const extractMock = vi.fn();
+vi.mock('../../../src/providers/extract-provider.js', () => ({
+  getExtractProvider: vi.fn(async () => ({
+    name: 'v1' as const,
+    extract: extractMock,
+  })),
+  _resetExtractProviderForTest: vi.fn(),
 }));
 
 vi.mock('../../../src/extraction/markdown.js', async () => {
@@ -36,7 +41,6 @@ vi.mock('../../../src/cache/change-detector.js', () => ({
 
 import { handleFetch } from '../../../src/tools/fetch.js';
 import { getCachedContent, cacheContent, isCacheUsable } from '../../../src/cache/store.js';
-import { extractContent } from '../../../src/extraction/pipeline.js';
 import { extractSection } from '../../../src/extraction/markdown.js';
 import { detectChange } from '../../../src/cache/change-detector.js';
 import type { ChangeResult } from '../../../src/cache/change-detector.js';
@@ -98,7 +102,7 @@ describe('handleFetch', () => {
 
   it('returns markdown content for a valid URL', async () => {
     const extraction = makeExtraction();
-    vi.mocked(extractContent).mockResolvedValue(extraction);
+    extractMock.mockResolvedValue(extraction);
 
     const router = mockRouter();
     const input: FetchInput = { url: 'https://example.com', include_full_markdown: true };
@@ -148,7 +152,7 @@ describe('handleFetch', () => {
   });
 
   it('returns cached: false when freshly fetched', async () => {
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction());
+    extractMock.mockResolvedValue(makeExtraction());
 
     const router = mockRouter();
     const input: FetchInput = { url: 'https://example.com' };
@@ -161,14 +165,14 @@ describe('handleFetch', () => {
   });
 
   it('passes section parameter through to extraction when fetching fresh', async () => {
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction());
+    extractMock.mockResolvedValue(makeExtraction());
 
     const router = mockRouter();
     const input: FetchInput = { url: 'https://example.com', section: 'Installation' };
 
     await handleFetch(input, router);
 
-    expect(vi.mocked(extractContent)).toHaveBeenCalledWith(
+    expect(extractMock).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
       expect.objectContaining({ section: 'Installation' }),
@@ -193,7 +197,7 @@ describe('handleFetch', () => {
   });
 
   it('respects max_chars on fresh content', async () => {
-    vi.mocked(extractContent).mockResolvedValue(
+    extractMock.mockResolvedValue(
       makeExtraction({ markdown: 'A'.repeat(500) }),
     );
 
@@ -202,7 +206,7 @@ describe('handleFetch', () => {
 
     await handleFetch(input, router);
 
-    expect(vi.mocked(extractContent)).toHaveBeenCalledWith(
+    expect(extractMock).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
       expect.objectContaining({ maxChars: 100 }),
@@ -254,7 +258,7 @@ describe('handleFetch', () => {
     const cached = makeCached();
     vi.mocked(getCachedContent).mockReturnValue(cached);
     vi.mocked(isCacheUsable).mockReturnValue({ usable: false, stale: false });
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction());
+    extractMock.mockResolvedValue(makeExtraction());
 
     const router = mockRouter();
     const input: FetchInput = { url: 'https://example.com' };
@@ -267,7 +271,7 @@ describe('handleFetch', () => {
   });
 
   it('calls cacheContent after fresh fetch', async () => {
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction());
+    extractMock.mockResolvedValue(makeExtraction());
 
     const router = mockRouter();
     const input: FetchInput = { url: 'https://example.com' };
@@ -289,7 +293,7 @@ describe('handleFetch --- force_refresh', () => {
     const cached = makeCached();
     vi.mocked(getCachedContent).mockReturnValue(cached);
     vi.mocked(isCacheUsable).mockReturnValue({ usable: true, stale: false });
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction({ markdown: 'fresh content' }));
+    extractMock.mockResolvedValue(makeExtraction({ markdown: 'fresh content' }));
 
     const router = mockRouter();
     const input: FetchInput = { url: 'https://example.com', force_refresh: true, include_full_markdown: true };
@@ -303,7 +307,7 @@ describe('handleFetch --- force_refresh', () => {
   });
 
   it('still caches the fresh result after force_refresh', async () => {
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction({ markdown: 'newly fetched' }));
+    extractMock.mockResolvedValue(makeExtraction({ markdown: 'newly fetched' }));
 
     const router = mockRouter();
     const input: FetchInput = { url: 'https://example.com', force_refresh: true };
@@ -352,7 +356,7 @@ describe('handleFetch --- actions support', () => {
   });
 
   it('passes actions to router.fetch', async () => {
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction());
+    extractMock.mockResolvedValue(makeExtraction());
 
     const router = mockRouter();
     const actions = [
@@ -371,7 +375,7 @@ describe('handleFetch --- actions support', () => {
       { action_index: 0, type: 'click' as const, success: true },
       { action_index: 1, type: 'wait' as const, success: true },
     ];
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction());
+    extractMock.mockResolvedValue(makeExtraction());
     const router = mockRouter({ actionResults });
     const input: FetchInput = {
       url: 'https://example.com',
@@ -387,7 +391,7 @@ describe('handleFetch --- actions support', () => {
   });
 
   it('does not include action_results when no actions provided', async () => {
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction());
+    extractMock.mockResolvedValue(makeExtraction());
     const router = mockRouter();
     const input: FetchInput = { url: 'https://example.com' };
 
@@ -401,7 +405,7 @@ describe('handleFetch --- actions support', () => {
     const cached = makeCached();
     vi.mocked(getCachedContent).mockReturnValue(cached);
     vi.mocked(isCacheUsable).mockReturnValue({ usable: true, stale: false });
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction());
+    extractMock.mockResolvedValue(makeExtraction());
 
     const router = mockRouter();
     const input: FetchInput = {
@@ -436,7 +440,7 @@ describe('handleFetch --- actions support', () => {
     const actionResults = [
       { action_index: 0, type: 'screenshot' as const, success: true, screenshot: 'base64data' },
     ];
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction());
+    extractMock.mockResolvedValue(makeExtraction());
     const router = mockRouter({ actionResults });
     const input: FetchInput = {
       url: 'https://example.com',
@@ -451,7 +455,7 @@ describe('handleFetch --- actions support', () => {
   });
 
   it('handles empty actions array (no-op)', async () => {
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction());
+    extractMock.mockResolvedValue(makeExtraction());
     const router = mockRouter();
     const input: FetchInput = { url: 'https://example.com', actions: [] };
 
@@ -473,7 +477,7 @@ describe('handleFetch --- change detection', () => {
 
   it('calls detectChange after extraction for fresh fetch', async () => {
     const extraction = makeExtraction({ markdown: '# New Content' });
-    vi.mocked(extractContent).mockResolvedValue(extraction);
+    extractMock.mockResolvedValue(extraction);
 
     const router = mockRouter();
     const input: FetchInput = { url: 'https://example.com/page' };
@@ -487,7 +491,7 @@ describe('handleFetch --- change detection', () => {
   });
 
   it('includes changed=true in response when content changed', async () => {
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction());
+    extractMock.mockResolvedValue(makeExtraction());
     vi.mocked(detectChange).mockReturnValue({
       changed: true,
       previousHash: 'abc123def456',
@@ -506,7 +510,7 @@ describe('handleFetch --- change detection', () => {
   });
 
   it('does not include change fields when content is unchanged', async () => {
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction());
+    extractMock.mockResolvedValue(makeExtraction());
     vi.mocked(detectChange).mockReturnValue({ changed: false });
 
     const router = mockRouter();
@@ -536,7 +540,7 @@ describe('handleFetch --- change detection', () => {
   });
 
   it('handles detectChange throwing gracefully', async () => {
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction());
+    extractMock.mockResolvedValue(makeExtraction());
     vi.mocked(detectChange).mockImplementation(() => { throw new Error('DB error'); });
 
     const router = mockRouter();
@@ -551,7 +555,7 @@ describe('handleFetch --- change detection', () => {
   });
 
   it('includes change detection fields alongside existing output fields', async () => {
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction({
+    extractMock.mockResolvedValue(makeExtraction({
       title: 'My Page',
       markdown: '# Updated',
     }));
@@ -579,7 +583,7 @@ describe('handleFetch --- change detection', () => {
     const cached = makeCached();
     vi.mocked(getCachedContent).mockReturnValue(cached);
     vi.mocked(isCacheUsable).mockReturnValue({ usable: false, stale: false });
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction({ markdown: 'new content' }));
+    extractMock.mockResolvedValue(makeExtraction({ markdown: 'new content' }));
     vi.mocked(detectChange).mockReturnValue({
       changed: true,
       previousHash: 'old-hash',
@@ -598,7 +602,7 @@ describe('handleFetch --- change detection', () => {
   });
 
   it('returns changed=false for first-time fetch (no prior cache)', async () => {
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction());
+    extractMock.mockResolvedValue(makeExtraction());
     vi.mocked(detectChange).mockReturnValue({ changed: false });
 
     const router = mockRouter();
@@ -626,7 +630,7 @@ describe('handleFetch --- evidence shape', () => {
     'TypeScript adds static typing to JavaScript so you can catch errors during build.';
 
   it('default response includes evidence with citation_id and source_span', async () => {
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction({ markdown: longMarkdown }));
+    extractMock.mockResolvedValue(makeExtraction({ markdown: longMarkdown }));
     const router = mockRouter();
     const input: FetchInput = { url: 'https://example.com' };
 
@@ -642,7 +646,7 @@ describe('handleFetch --- evidence shape', () => {
   });
 
   it('default response preserves full markdown body alongside evidence', async () => {
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction({ markdown: longMarkdown }));
+    extractMock.mockResolvedValue(makeExtraction({ markdown: longMarkdown }));
     const router = mockRouter();
     const input: FetchInput = { url: 'https://example.com' };
 
@@ -654,7 +658,7 @@ describe('handleFetch --- evidence shape', () => {
   });
 
   it('include_full_markdown=false strips the full markdown body', async () => {
-    vi.mocked(extractContent).mockResolvedValue(makeExtraction({ markdown: longMarkdown }));
+    extractMock.mockResolvedValue(makeExtraction({ markdown: longMarkdown }));
     const router = mockRouter();
     const input: FetchInput = { url: 'https://example.com', include_full_markdown: false };
 

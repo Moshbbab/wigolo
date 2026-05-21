@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { WIGOLO_INSTRUCTIONS, TOOL_DESCRIPTIONS } from '../../src/instructions.js';
+import {
+  WIGOLO_INSTRUCTIONS,
+  WIGOLO_INSTRUCTIONS_FULL,
+  TOOL_DESCRIPTIONS,
+} from '../../src/instructions.js';
 import type { ToolName } from '../../src/instructions.js';
 
-describe('WIGOLO_INSTRUCTIONS v3 routing patterns', () => {
+describe('WIGOLO_INSTRUCTIONS v3 routing patterns (per-session)', () => {
   it('mentions all v3 tools by name', () => {
     expect(WIGOLO_INSTRUCTIONS).toContain('find_similar');
     expect(WIGOLO_INSTRUCTIONS).toContain('research');
@@ -11,12 +15,10 @@ describe('WIGOLO_INSTRUCTIONS v3 routing patterns', () => {
 
   it('contains documentation lookup routing pattern', () => {
     expect(WIGOLO_INSTRUCTIONS).toContain('include_domains');
-    expect(WIGOLO_INSTRUCTIONS).toContain('docs');
   });
 
-  it('contains error debugging routing pattern', () => {
-    expect(WIGOLO_INSTRUCTIONS).toMatch(/error/i);
-    expect(WIGOLO_INSTRUCTIONS).toContain('category');
+  it('contains category param hint', () => {
+    expect(WIGOLO_INSTRUCTIONS).toContain('cache');
   });
 
   it('contains library research routing pattern', () => {
@@ -43,11 +45,7 @@ describe('WIGOLO_INSTRUCTIONS v3 routing patterns', () => {
 
   it('contains cache-first guidance', () => {
     expect(WIGOLO_INSTRUCTIONS).toContain('cache');
-    expect(WIGOLO_INSTRUCTIONS).toMatch(/before.*(search|fetch)/i);
-  });
-
-  it('contains multi-query guidance', () => {
-    expect(WIGOLO_INSTRUCTIONS).toMatch(/multi.*query|array.*query|semantically.*varied/i);
+    expect(WIGOLO_INSTRUCTIONS).toMatch(/before.*(search|fetch|going to the network)/i);
   });
 
   it('mentions answer format for search', () => {
@@ -77,13 +75,24 @@ describe('WIGOLO_INSTRUCTIONS v3 routing patterns', () => {
     expect(WIGOLO_INSTRUCTIONS).toContain('`research`');
     expect(WIGOLO_INSTRUCTIONS).toContain('`agent`');
   });
+});
 
-  it('preserves existing v2 routing guidance', () => {
-    expect(WIGOLO_INSTRUCTIONS).toContain('localhost');
-    expect(WIGOLO_INSTRUCTIONS).toContain('use_auth');
-    expect(WIGOLO_INSTRUCTIONS).toContain('full-text search syntax');
-    expect(WIGOLO_INSTRUCTIONS).toContain('sitemap');
-    expect(WIGOLO_INSTRUCTIONS).toContain('include_patterns');
+describe('WIGOLO_INSTRUCTIONS_FULL v3 routing patterns (resource)', () => {
+  it('contains the error debugging routing pattern', () => {
+    expect(WIGOLO_INSTRUCTIONS_FULL).toMatch(/error/i);
+    expect(WIGOLO_INSTRUCTIONS_FULL).toContain('category');
+  });
+
+  it('contains multi-query guidance', () => {
+    expect(WIGOLO_INSTRUCTIONS_FULL).toMatch(/multi.*query|array.*query|semantically.*varied/i);
+  });
+
+  it('preserves existing v2 routing guidance moved to the full doc', () => {
+    expect(WIGOLO_INSTRUCTIONS_FULL).toContain('localhost');
+    expect(WIGOLO_INSTRUCTIONS_FULL).toContain('use_auth');
+    expect(WIGOLO_INSTRUCTIONS_FULL).toContain('full-text search syntax');
+    expect(WIGOLO_INSTRUCTIONS_FULL).toContain('sitemap');
+    expect(WIGOLO_INSTRUCTIONS_FULL).toContain('include_patterns');
   });
 });
 

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { WIGOLO_INSTRUCTIONS, TOOL_DESCRIPTIONS } from '../../src/instructions.js';
+import {
+  WIGOLO_INSTRUCTIONS,
+  WIGOLO_INSTRUCTIONS_FULL,
+  TOOL_DESCRIPTIONS,
+} from '../../src/instructions.js';
 import type { ToolName } from '../../src/instructions.js';
 
 describe('knowledge layer integration', () => {
@@ -60,7 +64,7 @@ describe('knowledge layer integration', () => {
     expect(WIGOLO_INSTRUCTIONS.length).toBeLessThan(10000);
   });
 
-  it('v3 routing table in instructions covers all intents', () => {
+  it('v3 routing table in the full guide covers all intents', () => {
     const intents = [
       'Documentation lookup',
       'Error debugging',
@@ -73,13 +77,13 @@ describe('knowledge layer integration', () => {
       'Site inventory',
     ];
     for (const intent of intents) {
-      expect(WIGOLO_INSTRUCTIONS).toContain(intent);
+      expect(WIGOLO_INSTRUCTIONS_FULL).toContain(intent);
     }
   });
 
-  it('multi-query guidance section exists in instructions', () => {
-    expect(WIGOLO_INSTRUCTIONS).toContain('Multi-query');
-    expect(WIGOLO_INSTRUCTIONS).toContain('semantically varied');
-    expect(WIGOLO_INSTRUCTIONS).toContain('keyword forms');
+  it('multi-query guidance section exists in the full guide', () => {
+    expect(WIGOLO_INSTRUCTIONS_FULL).toContain('Multi-query');
+    expect(WIGOLO_INSTRUCTIONS_FULL).toContain('semantically varied');
+    expect(WIGOLO_INSTRUCTIONS_FULL).toContain('keyword forms');
   });
 });

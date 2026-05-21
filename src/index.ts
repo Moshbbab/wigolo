@@ -12,6 +12,7 @@ import { runInit } from './cli/init.js';
 import { runUninstall } from './cli/uninstall.js';
 import { runSetupMcp } from './cli/setup-mcp.js';
 import { runStatus } from './cli/status.js';
+import { runBackfill } from './cli/backfill.js';
 import { printHelp, printVersion, printUnknownCommand } from './cli/help.js';
 import { getConfig } from './config.js';
 import { startServer } from './server.js';
@@ -76,6 +77,12 @@ switch (command) {
 
   case 'status': {
     const code = await runStatus(args);
+    process.exit(code);
+    break;
+  }
+
+  case 'backfill': {
+    const code = await runBackfill(args);
     process.exit(code);
     break;
   }

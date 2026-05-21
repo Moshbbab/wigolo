@@ -36,6 +36,7 @@ Subcommands:
   uninstall               Remove wigolo install
   setup mcp               Wire wigolo into MCP clients
   status                  Show running daemon status
+  backfill                Backfill embeddings for cached pages without them
 
 Options:
   -h, --help              Print this help

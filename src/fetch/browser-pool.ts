@@ -339,6 +339,32 @@ export class MultiBrowserPool {
         log.debug('networkidle timeout, using page content as-is', { url, type: resolvedType });
       }
 
+      // SPAs (React/Next/etc.) ship a populated nav-shell that already clears
+      // networkidle even though the article body is empty. Wait briefly for
+      // a `<main>`/`<article>` to gain real text, or for several `<p>` blocks
+      // to render. Mirrors the playwright-tier hydration probe so search +
+      // crawl + find_similar fetches don't leak nav-only shells.
+      if (typeof page.waitForFunction === 'function') {
+        const hydrationBudget = Math.min(5000, Math.max(800, Math.floor(navTimeoutMs / 6)));
+        await page.waitForFunction(
+          () => {
+            const main = document.querySelector('main, article');
+            if (main) {
+              const text = (main as HTMLElement).innerText ?? '';
+              if (text.trim().length > 300) return true;
+            }
+            const paragraphs = document.querySelectorAll('p');
+            let pText = 0;
+            for (const p of Array.from(paragraphs).slice(0, 10)) {
+              pText += ((p as HTMLElement).innerText ?? '').length;
+            }
+            return pText > 600;
+          },
+          undefined,
+          { timeout: hydrationBudget },
+        ).catch(() => undefined);
+      }
+
       let actionResults: ActionResult[] | undefined;
       if (options.actions && options.actions.length > 0) {
         actionResults = await executeActions(page, options.actions);

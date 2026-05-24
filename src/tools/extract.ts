@@ -9,7 +9,7 @@ import { extractJsonLd } from '../extraction/jsonld.js';
 import { extractStructured } from '../extraction/structured.js';
 import { getCachedContent, isExpired } from '../cache/store.js';
 import { fetchWithPlaywright } from '../fetch/playwright-tier.js';
-import { countTokens } from '../search/tokens.js';
+import { countTokens, truncateByTokens } from '../search/tokens.js';
 import { createLogger } from '../logger.js';
 import {
   isNamedSchemaType,
@@ -49,8 +49,12 @@ function clampExtractData(
   if (typeof data === 'object') {
     const obj = data as Record<string, unknown>;
     const out: Record<string, unknown> = {};
-    // First, copy primitive fields (cheap, almost always retained).
+    // First, copy small primitive fields (cheap, almost always retained).
+    // Stash oversize strings + arrays for proportional truncation in pass 2 so
+    // a single huge `body`/`markdown` field never disappears entirely when the
+    // caller sets a tight max_tokens_out.
     const arrayKeys: string[] = [];
+    const oversizeStringKeys: string[] = [];
     let used = 2; // {} braces
     for (const [k, v] of Object.entries(obj)) {
       if (Array.isArray(v)) {
@@ -62,6 +66,25 @@ function clampExtractData(
       if (used + t <= maxTokens) {
         out[k] = v;
         used += t;
+        continue;
+      }
+      if (typeof v === 'string' && v.length > 0) {
+        oversizeStringKeys.push(k);
+        out[k] = ''; // placeholder, filled in pass 2
+        used += countTokens(JSON.stringify({ [k]: '' })) - 1;
+      }
+    }
+    // Pass 2: distribute remaining budget across oversize string fields
+    // (truncate to fit) before filling array fields.
+    if (oversizeStringKeys.length > 0) {
+      const perField = Math.max(64, Math.floor((maxTokens - used) / oversizeStringKeys.length));
+      for (const k of oversizeStringKeys) {
+        const original = obj[k] as string;
+        const truncated = truncateByTokens(original, perField);
+        out[k] = truncated.length < original.length ? `${truncated.trimEnd()}…` : truncated;
+        used += countTokens(JSON.stringify({ [k]: out[k] })) - 1;
+        // Reclaim placeholder space accounted earlier.
+        used -= countTokens(JSON.stringify({ [k]: '' })) - 1;
       }
     }
     // Then fill array fields proportionally, biggest-first.

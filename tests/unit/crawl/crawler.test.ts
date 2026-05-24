@@ -406,3 +406,62 @@ describe('Crawler — Sitemap', () => {
     expect(result.total_found).toBe(50);
   });
 });
+
+describe('Crawler — canonical output URLs', () => {
+  it('collapses trailing-slash duplicates from sitemap into one page', async () => {
+    const sitemapXml = `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <url><loc>https://docs.example.com/intro</loc></url>
+      <url><loc>https://docs.example.com/intro/</loc></url>
+      <url><loc>https://docs.example.com/api</loc></url>
+    </urlset>`;
+
+    const rawFetch: RawFetchFn = vi.fn(async (url) => {
+      if (url.endsWith('/sitemap.xml')) {
+        return { url, finalUrl: url, html: sitemapXml, contentType: 'text/xml', statusCode: 200, method: 'http' as const, headers: {} };
+      }
+      return { url, finalUrl: url, html: '', contentType: 'text/plain', statusCode: 404, method: 'http' as const, headers: {} };
+    });
+
+    const fetch: FetchFn = vi.fn(async (url) =>
+      makeFetchOutput(url, 'Page', '# Page', []),
+    );
+
+    const crawler = new Crawler(fetch, rawFetch);
+    const result = await crawler.crawl({
+      url: 'https://docs.example.com',
+      strategy: 'sitemap',
+      max_pages: 10,
+    });
+
+    const urls = result.pages.map((p) => p.url);
+    expect(urls).toHaveLength(2);
+    expect(urls).toContain('https://docs.example.com/intro');
+    expect(urls).toContain('https://docs.example.com/api');
+    expect(urls.some((u) => u.endsWith('/intro/'))).toBe(false);
+  });
+
+  it('strips trailing slash on emitted non-root paths', async () => {
+    const fetch: FetchFn = vi.fn(async (url) => {
+      if (url === 'https://docs.example.com/intro') {
+        // Page returns trailing-slash variant in result.url to simulate
+        // redirects/server normalization — emit should strip it.
+        return makeFetchOutput('https://docs.example.com/intro/', 'Intro', '# Intro', []);
+      }
+      return makeFetchOutput(url, '', '', []);
+    });
+    const rawFetch: RawFetchFn = vi.fn(async () => ({
+      url: '', finalUrl: '', html: '', contentType: 'text/plain', statusCode: 200, method: 'http' as const, headers: {},
+    }));
+
+    const crawler = new Crawler(fetch, rawFetch);
+    const result = await crawler.crawl({
+      url: 'https://docs.example.com/intro',
+      strategy: 'bfs',
+      max_pages: 5,
+      max_depth: 0,
+    });
+
+    expect(result.pages).toHaveLength(1);
+    expect(result.pages[0].url).toBe('https://docs.example.com/intro');
+  });
+});

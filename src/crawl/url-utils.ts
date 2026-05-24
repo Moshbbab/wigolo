@@ -13,6 +13,23 @@ export function canonicalForCrawl(url: string): string {
   }
 }
 
+// Display-friendly canonicalization for emitted page URLs. Strips a trailing
+// slash on non-root paths without round-tripping through `new URL().toString()`
+// — that round-trip otherwise injects a root slash onto origin-only URLs
+// (`https://x.com` → `https://x.com/`) which surprises callers.
+export function canonicalForOutput(url: string): string {
+  try {
+    const u = new URL(url);
+    if (u.pathname.length > 1 && u.pathname.endsWith('/')) {
+      const trimmed = u.pathname.slice(0, -1);
+      return `${u.origin}${trimmed}${u.search}${u.hash}`;
+    }
+    return url;
+  } catch {
+    return url;
+  }
+}
+
 export function isPrivateUrl(url: string): boolean {
   const parsed = new URL(url);
   const hostname = parsed.hostname.replace(/^\[|\]$/g, ''); // strip IPv6 brackets

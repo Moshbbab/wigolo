@@ -1,5 +1,5 @@
 import type { FetchOutput, CrawlInput, CrawlOutput, CrawlResultItem, LinkEdge, RawFetchResult } from '../types.js';
-import { matchesPatterns, canonicalForCrawl } from './url-utils.js';
+import { matchesPatterns, canonicalForCrawl, canonicalForOutput } from './url-utils.js';
 import { RateLimiter } from './rate-limiter.js';
 import { RobotsParser } from './robots.js';
 import { parseSitemap, parseSitemapIndex, extractSitemapUrlFromRobots } from './sitemap.js';
@@ -123,7 +123,7 @@ export class Crawler {
       }
 
       const item: CrawlResultItem = {
-        url: fetchResult.url,
+        url: canonicalForOutput(fetchResult.url),
         title: fetchResult.title,
         markdown: fetchResult.markdown,
         depth,
@@ -215,7 +215,19 @@ export class Crawler {
     maxPages: number,
     robotsParser: RobotsParser | null,
   ): Promise<CrawlOutput> {
-    const filtered = urls.filter((url) =>
+    // De-duplicate by canonical form first so /foo and /foo/ collapse before
+    // pattern filtering, then keep the first occurrence's original URL for
+    // the network fetch (some servers 404 on the slash-stripped variant).
+    const seenCanonical = new Set<string>();
+    const dedupedUrls: string[] = [];
+    for (const url of urls) {
+      const canonical = canonicalForCrawl(url);
+      if (seenCanonical.has(canonical)) continue;
+      seenCanonical.add(canonical);
+      dedupedUrls.push(url);
+    }
+
+    const filtered = dedupedUrls.filter((url) =>
       matchesPatterns(url, input.include_patterns, input.exclude_patterns),
     );
 
@@ -237,7 +249,7 @@ export class Crawler {
         release();
 
         if (!result.error) {
-          const item: CrawlResultItem = { url: result.url, title: result.title, markdown: result.markdown, depth: 0 };
+          const item: CrawlResultItem = { url: canonicalForOutput(result.url), title: result.title, markdown: result.markdown, depth: 0 };
           pages.push(item);
 
           if (indexing) await indexCrawlResult(item);

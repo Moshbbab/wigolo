@@ -223,6 +223,11 @@ async function runDoctorInner(dataDir: string): Promise<number> {
     ? 'core'
     : rawBackend;
   out(`  Backend:       ${aliased ?? normalized} (default: core)`);
+  if (normalized === 'hybrid') {
+    const { SIGNAL_NAMES } = await import('../search/hybrid/signals.js');
+    out(`  hybrid mode:   core runs first; falls back to searxng + RRF merge when any signal fires`);
+    out(`  signals:       ${SIGNAL_NAMES.join(', ')}`);
+  }
 
   out('');
   const state = getBootstrapState(dataDir) as BootstrapState | null;

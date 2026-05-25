@@ -125,6 +125,14 @@ For broad queries, pass an array of 3-5 semantically varied keyword forms rather
 
 For library/framework/SDK queries, **always pass \`include_domains\`** with official sites. Unscoped queries return generic noise. \`category: "docs"\` alone returns generic portals -- pair with \`include_domains\` or omit. Skip domain scoping for error strings, broad exploration, and news.
 
+## Search backend modes
+
+The \`WIGOLO_SEARCH\` env selects the search path. Defaults to \`core\`.
+
+- \`core\` (default) -- direct engines (Bing, DDG, Brave, Wikipedia, MDN, SO, GitHub-code, HN, arXiv, ...), RRF, rerank. Low latency, transparent provenance.
+- \`searxng\` -- legacy SearXNG aggregator. Opt-in. Higher recall on long-tail queries; slower cold start.
+- \`hybrid\` -- runs \`core\` first; falls back to \`searxng\` and merges via RRF when a signal fires. Signals: \`brand_collision_suspect\`, \`include_domains_over_filter\`, \`all_engines_failed\`, \`top1_high_score_low_overlap\`. The merged response carries \`fallback_signal\` (\`null\` when no signal fired; a \`+\`-joined name list otherwise) so callers can detect the fallback path.
+
 ## Performance
 
 - \`max_results: 3\` for focused lookups; \`5\` default; \`10+\` only for broad research.

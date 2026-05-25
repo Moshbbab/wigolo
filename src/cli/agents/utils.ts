@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync, lstatSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync, lstatSync, renameSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
@@ -47,6 +47,28 @@ export function readSkillDir(name: string): Record<string, string> {
 }
 
 /**
+ * If a backup file already exists at `bakPath`, rename it to a timestamped
+ * sibling so a subsequent backup write does not destroy the prior copy.
+ * Silent no-op when no backup exists or the rename fails — best-effort safety
+ * net for repeated interrupted installs.
+ */
+function rotateBackup(bakPath: string): void {
+  if (!existsSync(bakPath)) return;
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  let target = `${bakPath}.${ts}`;
+  let suffix = 0;
+  while (existsSync(target)) {
+    suffix += 1;
+    target = `${bakPath}.${ts}-${suffix}`;
+  }
+  try {
+    renameSync(bakPath, target);
+  } catch {
+    // best-effort — leave the existing bak in place rather than crash
+  }
+}
+
+/**
  * Merge a block (delimited by wigolo:start/wigolo:end markers) into a file.
  * Creates the file if it doesn't exist.
  * Replaces an existing block, or appends if no block present.
@@ -83,6 +105,7 @@ export function mergeBlock(filePath: string, block: string): void {
   }
 
   if (hasStart !== hasEnd) {
+    rotateBackup(filePath + '.wigolo-bak');
     writeFileSync(filePath + '.wigolo-bak', content, 'utf-8');
 
     let salvaged = content;

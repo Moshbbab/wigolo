@@ -98,6 +98,38 @@ describe('mergeBlock', () => {
     expect(endCount).toBe(1);
     expect(existsSync(filePath + '.wigolo-bak')).toBe(true);
   });
+
+  it('rotates an existing .wigolo-bak so a repeated interrupted install does not overwrite the prior backup', () => {
+    // First interrupted install leaves a `.wigolo-bak` with original user
+    // content. Second interrupted install must not clobber it.
+    const filePath = join(tmpDir, 'rotate.md');
+    const firstUser = '# Very Important Notes\n\n<!-- wigolo:start v0 -->\n';
+    writeFileSync(filePath, firstUser, 'utf-8');
+    mergeBlock(filePath, BLOCK);
+    expect(existsSync(filePath + '.wigolo-bak')).toBe(true);
+    expect(readFileSync(filePath + '.wigolo-bak', 'utf-8')).toContain('Very Important Notes');
+
+    // Second interrupted install: another orphan-start state shows up.
+    const secondUser = '# Different Notes\n\n<!-- wigolo:start v1 -->\n';
+    writeFileSync(filePath, secondUser, 'utf-8');
+    mergeBlock(filePath, BLOCK);
+
+    // Primary .wigolo-bak should still hold the first interrupted state.
+    expect(existsSync(filePath + '.wigolo-bak')).toBe(true);
+    const primary = readFileSync(filePath + '.wigolo-bak', 'utf-8');
+    // A rotated copy with a timestamp suffix must exist alongside.
+    const fs = require('node:fs');
+    const all = fs.readdirSync(tmpDir) as string[];
+    const rotated = all.filter((n: string) => n.startsWith('rotate.md.wigolo-bak.'));
+    expect(rotated.length).toBeGreaterThanOrEqual(1);
+
+    // Together the primary + rotated copies must contain BOTH the first and
+    // second user contents — no data lost.
+    const rotatedContents = rotated.map((n: string) => readFileSync(join(tmpDir, n), 'utf-8'));
+    const allBackups = [primary, ...rotatedContents].join('\n--\n');
+    expect(allBackups).toContain('Very Important Notes');
+    expect(allBackups).toContain('Different Notes');
+  });
 });
 
 // ---------------------------------------------------------------------------

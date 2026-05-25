@@ -159,6 +159,45 @@ describe('guardUrl SSRF', () => {
       const r = guardUrl('http://[::ffff:127.0.0.1]/', 'url');
       expect(r.ok).toBe(false);
     });
+
+    it('rejects IPv4-compatible loopback ::127.0.0.1 (dotted)', () => {
+      // The deprecated IPv4-compatible IPv6 form. WHATWG URL parsing
+      // normalizes this to [::7f00:1] (no `ffff:` segment), which a guard
+      // that only looks for the `ffff:` IPv4-mapped form will miss.
+      // Some Linux kernels still route this to the embedded IPv4, so it's
+      // a documented SSRF bypass class.
+      const r = guardUrl('http://[::127.0.0.1]/', 'url');
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toMatch(/loopback|private/i);
+    });
+
+    it('rejects IPv4-compatible loopback hex form [::7f00:1]', () => {
+      // Same address as ::127.0.0.1 after normalization — the guard must
+      // catch the hex shape directly because that's what `new URL()` emits.
+      const r = guardUrl('http://[::7f00:1]/', 'url');
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toMatch(/loopback|private/i);
+    });
+
+    it('rejects IPv4-compatible private 10.0.0.1 in IPv6 form', () => {
+      // 10.0.0.1 -> 0a00:0001 -> [::a00:1]
+      const r = guardUrl('http://[::a00:1]/', 'url');
+      expect(r.ok).toBe(false);
+    });
+
+    it('rejects IPv4-compatible link-local 169.254.169.254 in IPv6 form', () => {
+      // 169.254.169.254 -> a9fe:a9fe -> [::a9fe:a9fe]
+      const r = guardUrl('http://[::a9fe:a9fe]/', 'url');
+      expect(r.ok).toBe(false);
+    });
+
+    it('accepts IPv4-compatible PUBLIC 8.8.8.8 in IPv6 form', () => {
+      // 8.8.8.8 -> 0808:0808 -> [::808:808] — embedded address is public,
+      // so the guard must NOT reject it. Pins that the decode is precise
+      // and doesn't over-reject every `::a:b` shape.
+      const r = guardUrl('http://[::808:808]/', 'url');
+      expect(r.ok).toBe(true);
+    });
   });
 
   describe('rejects malformed inputs', () => {

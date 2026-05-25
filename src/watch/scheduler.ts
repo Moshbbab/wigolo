@@ -5,6 +5,7 @@ import type { ChangeReport, WatchJob } from '../types.js';
 import { computeDiffSummary } from '../cache/diff-summary.js';
 import { handleFetch } from '../tools/fetch.js';
 import { getOverdueJobs, recordCheck, getJob } from './store.js';
+import { guardUrl } from './ssrf.js';
 
 const log = createLogger('cache');
 
@@ -25,6 +26,35 @@ export async function runCheck(
   router: SmartRouter,
 ): Promise<ChangeReport> {
   const report: ChangeReport = { url: job.url, changed: false };
+  // Re-run the SSRF guard at check time. The guard is also enforced at
+  // registration, but re-checking here makes the guards composable: if the
+  // policy ever tightens, previously-persisted jobs don't get grandfathered
+  // into a now-forbidden URL space.
+  const urlGuard = guardUrl(job.url, 'url');
+  if (!urlGuard.ok) {
+    report.error = urlGuard.reason;
+    log.warn('watch check rejected by ssrf guard', {
+      id: job.id,
+      url: job.url,
+      reason: urlGuard.reason,
+    });
+    recordCheck(job.id, Date.now(), job.last_content_hash ?? '');
+    return report;
+  }
+  if (job.notification && job.notification !== 'inline') {
+    const notifGuard = guardUrl(job.notification, 'notification');
+    if (!notifGuard.ok) {
+      report.error = notifGuard.reason;
+      log.warn('watch check rejected by ssrf guard', {
+        id: job.id,
+        notification: job.notification,
+        reason: notifGuard.reason,
+      });
+      recordCheck(job.id, Date.now(), job.last_content_hash ?? '');
+      return report;
+    }
+  }
+
   try {
     const fetched = await handleFetch(
       { url: job.url, include_full_markdown: true, force_refresh: true },
@@ -159,11 +189,28 @@ async function deliverWebhook(
   // Minimal POST. We rely on the runtime's built-in fetch (Node 20+) so
   // there's no extra dependency. Failures are swallowed by the caller's
   // catch — webhooks are best-effort by spec, not a delivery guarantee.
+  //
+  // `redirect: 'manual'` is load-bearing for the SSRF guard. A public
+  // webhook URL passes the guardUrl check at registration time, but the
+  // target server can return 307/308 redirecting to e.g.
+  // http://127.0.0.1/admin. With the default `redirect: 'follow'`, Node's
+  // fetch would silently re-issue the POST against the loopback target,
+  // bypassing the SSRF guard at delivery time. We treat any 3xx as a hard
+  // delivery error and never chase the Location.
   const res = await fetch(webhookUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
+    redirect: 'manual',
   });
+  if (res.status >= 300 && res.status < 400) {
+    log.debug('webhook redirect refused', {
+      url: webhookUrl,
+      status: res.status,
+      location: res.headers.get('location') ?? null,
+    });
+    throw new Error(`webhook returned a redirect (${res.status}); not followed`);
+  }
   if (!res.ok) {
     throw new Error(`webhook responded ${res.status}`);
   }

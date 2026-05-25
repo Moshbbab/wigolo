@@ -326,6 +326,73 @@ describe('watch handler', () => {
       expect(after[0].last_content_hash).toBe('baseline-hash');
     });
 
+    it('webhook delivery does NOT follow 3xx redirects (SSRF: redirect to 127.0.0.1)', async () => {
+      // A public webhook URL passes the guard at registration time, but the
+      // target server can return 307/308 redirecting to http://127.0.0.1/.
+      // Node's default fetch follows redirects transparently, which would
+      // bypass the SSRF guard at delivery time. We assert that the webhook
+      // fetch is invoked with `redirect: 'manual'` AND that no follow-up
+      // request to the loopback Location target ever happens.
+      const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) => {
+        // Return a 308 with a loopback Location header. With
+        // redirect:'manual' the runtime returns this response to the caller
+        // and never re-fetches; with redirect:'follow' (the default), the
+        // runtime would transparently re-fetch http://127.0.0.1/admin.
+        return new Response('', {
+          status: 308,
+          headers: { location: 'http://127.0.0.1/admin' },
+        });
+      });
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = fetchMock as typeof globalThis.fetch;
+      try {
+        const router = mockRouter('changed body');
+        // Create with a public webhook target so the guard passes.
+        const created = mustOk(await handleWatch(
+          {
+            action: 'create',
+            url: 'https://example.com/page',
+            interval_seconds: 60,
+            notification: 'https://hooks.example.com/incoming',
+          },
+          router,
+        ));
+        // Establish a baseline so the next check reports `changed=true` and
+        // triggers the webhook.
+        mustOk(await handleWatch(
+          { action: 'check', job_id: created.jobs[0].id },
+          router,
+        ));
+        // Swap router payload so the second check sees a different body.
+        const router2 = mockRouter('totally different body');
+        mustOk(await handleWatch(
+          { action: 'check', job_id: created.jobs[0].id },
+          router2,
+        ));
+        // The webhook is delivered via setImmediate / void; flush.
+        await new Promise((r) => setTimeout(r, 100));
+
+        // 1) The webhook fetch must have been invoked with redirect:'manual'.
+        //    This is the load-bearing assertion — without it, a regression
+        //    to redirect:'follow' (the fetch default) silently bypasses the
+        //    guard at delivery time.
+        const calls = fetchMock.mock.calls;
+        expect(calls.length).toBeGreaterThan(0);
+        const webhookCall = calls.find(
+          (c) => String(c[0]) === 'https://hooks.example.com/incoming',
+        );
+        expect(webhookCall).toBeDefined();
+        const init = webhookCall![1] as RequestInit | undefined;
+        expect(init?.redirect).toBe('manual');
+        // 2) Defence in depth — the implementation must never re-fetch the
+        //    Location header itself.
+        const urls = calls.map((c) => String(c[0]));
+        expect(urls.some((u) => u.includes('127.0.0.1'))).toBe(false);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
     it('runCheck records last_check_at even on fetch failure (avoids hot-looping a dead URL)', async () => {
       const failingRouter = {
         fetch: vi.fn(async () => {

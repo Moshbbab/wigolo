@@ -84,6 +84,24 @@ function isPrivateIpv6(host: string): boolean {
       if (isLoopbackIpv4(dotted)) return true;
     }
   }
+
+  // IPv4-compatible IPv6: deprecated `::a.b.c.d` form (no `ffff:` segment).
+  // WHATWG URL parsing normalizes `[::127.0.0.1]` to `[::7f00:1]`, so the
+  // guard must decode the bare two-hextet trailer the same way it decodes
+  // the `::ffff:...` variant above. Some Linux kernels still route this
+  // form to the embedded IPv4 — documented SSRF bypass class.
+  const v4compatDotted = h.match(/^::(\d+\.\d+\.\d+\.\d+)$/);
+  if (v4compatDotted && isLoopbackIpv4(v4compatDotted[1])) return true;
+
+  const v4compatHex = h.match(/^::([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (v4compatHex) {
+    const high = parseInt(v4compatHex[1], 16);
+    const low = parseInt(v4compatHex[2], 16);
+    if (!Number.isNaN(high) && !Number.isNaN(low)) {
+      const dotted = `${(high >> 8) & 0xff}.${high & 0xff}.${(low >> 8) & 0xff}.${low & 0xff}`;
+      if (isLoopbackIpv4(dotted)) return true;
+    }
+  }
   return false;
 }
 

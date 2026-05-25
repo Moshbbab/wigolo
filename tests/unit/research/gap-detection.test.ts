@@ -6,7 +6,7 @@ describe('detectEntityGaps', () => {
     const gaps = detectEntityGaps(
       'tradeoffs between MCP, OpenAPI tool schemas, and A2A for agent interop in 2026',
       [
-        'model context protocol comparison',
+        'MCP comparison for agent interop',
         'OpenAPI tool schema overview',
       ],
     );

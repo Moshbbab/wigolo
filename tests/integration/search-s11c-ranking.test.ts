@@ -129,6 +129,118 @@ describe('S11c integration — tool-boundary observable behaviour', () => {
     });
   });
 
+  describe('low-recall query expansion visible end-to-end', () => {
+    it('fires an auto-rewrite when initial query produces <= LOW_RECALL_THRESHOLD results, and the rewrite increases recall', async () => {
+      // Engine returns one result for the original query, three more for the
+      // expanded query. The provider should fire one auto-rewrite, fuse the
+      // expanded results, and end up with > 1 result.
+      let callCount = 0;
+      const seenQueries: string[] = [];
+      const engine: SearchEngine = {
+        name: 'mock',
+        search: vi.fn(async (q: string) => {
+          callCount += 1;
+          seenQueries.push(q);
+          if (callCount === 1) {
+            // Sparse initial result
+            return [makeResult('mock', 'https://result.test/a', 'a', 'body')];
+          }
+          // Expanded query brings in more results
+          return [
+            makeResult('mock', 'https://result.test/b', 'b', 'body'),
+            makeResult('mock', 'https://result.test/c', 'c', 'body'),
+            makeResult('mock', 'https://result.test/d', 'd', 'body'),
+          ];
+        }),
+      };
+      verticalState.general = [{ engine }];
+
+      const input: SearchInput = {
+        // "RAG" has an acronym expansion in the static map -> the rewrite
+        // adds "retrieval augmented generation" so engines see fuller query.
+        query: 'RAG tutorial overview',
+        include_content: false,
+      };
+      const provider = new CoreSearchProvider();
+      const result = await provider.search(input, mockCtx());
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      // The provider must have invoked the engine twice: once for the
+      // original query, once for the rewrite.
+      expect(callCount).toBe(2);
+      // The auto-rewrite is surfaced through query_understanding.rewrites.
+      expect(result.data.query_understanding?.rewrites?.length ?? 0).toBeGreaterThan(0);
+      const rewrites = result.data.query_understanding?.rewrites ?? [];
+      expect(
+        rewrites.some((r) => r.toLowerCase().includes('retrieval augmented generation')),
+      ).toBe(true);
+      // Recall went up.
+      expect(result.data.results.length).toBeGreaterThan(1);
+    });
+
+    it('does NOT fire when the initial result count is above the threshold', async () => {
+      let callCount = 0;
+      const engine: SearchEngine = {
+        name: 'mock',
+        search: vi.fn(async () => {
+          callCount += 1;
+          return [
+            makeResult('mock', 'https://r.test/1', '1', 'body'),
+            makeResult('mock', 'https://r.test/2', '2', 'body'),
+            makeResult('mock', 'https://r.test/3', '3', 'body'),
+            makeResult('mock', 'https://r.test/4', '4', 'body'),
+            makeResult('mock', 'https://r.test/5', '5', 'body'),
+          ];
+        }),
+      };
+      verticalState.general = [{ engine }];
+
+      const input: SearchInput = {
+        query: 'RAG tutorial pipeline overview',
+        include_content: false,
+      };
+      const provider = new CoreSearchProvider();
+      const result = await provider.search(input, mockCtx());
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      // Only one call — the initial query produced 5 results, no rewrite.
+      expect(callCount).toBe(1);
+      // No auto-rewrite surfaced.
+      const rewrites = result.data.query_understanding?.rewrites ?? [];
+      const hasAuto = rewrites.some((r) =>
+        r.toLowerCase().includes('retrieval augmented generation'),
+      );
+      expect(hasAuto).toBe(false);
+    });
+
+    it('does NOT fire when the query has no expandable token', async () => {
+      let callCount = 0;
+      const engine: SearchEngine = {
+        name: 'mock',
+        search: vi.fn(async () => {
+          callCount += 1;
+          // Sparse return so the threshold *would* trigger if a rewrite were
+          // available — but the query has no expandable token, so the
+          // provider must not retry.
+          return [makeResult('mock', 'https://r.test/lonely', 'a', 'body')];
+        }),
+      };
+      verticalState.general = [{ engine }];
+
+      const input: SearchInput = {
+        query: 'the and of', // all stop-words, no expansion possible
+        include_content: false,
+      };
+      const provider = new CoreSearchProvider();
+      const result = await provider.search(input, mockCtx());
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(callCount).toBe(1);
+    });
+  });
+
   describe('canonical URL dedup visible end-to-end', () => {
     it('utm-tagged and untagged variants merge into one row in the final result list', async () => {
       verticalState.general = [

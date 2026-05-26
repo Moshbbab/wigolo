@@ -18,7 +18,7 @@ import type {
 import { runV1Search } from './orchestrator.js';
 import { applyContextRank } from './context-rank.js';
 import { dedupAgainstRecentUrls } from './recent-cache-dedup.js';
-import { detectBrandCollision } from './brand-collision.js';
+import { detectBrandCollision, detectLexicalCollision } from './brand-collision.js';
 import { computeFreshnessSignal } from './freshness.js';
 import { buildQueryUnderstanding } from './query-understanding.js';
 import { buildEngineWarnings } from './engine-warnings.js';
@@ -397,10 +397,13 @@ export class CoreSearchProvider implements SearchProvider {
       ...(engineTelemetry ? { engine_warnings: engineWarnings } : {}),
     };
 
-    const collisionWarning = detectBrandCollision(
-      displayQuery,
-      items.map((i) => i.url),
-    );
+    // Slice 8 / M9: try the brand-domain check first (cheap, requires
+    // top-3 to actually carry a brand TLD). Fall back to the lexical
+    // dev-term collision check — fires on "useState" etc. even when the
+    // top-3 has no brand domain. Either path emits the same warning shape.
+    const collisionWarning =
+      detectBrandCollision(displayQuery, items.map((i) => i.url)) ??
+      detectLexicalCollision(displayQuery);
     if (collisionWarning) data.brand_collision_warning = collisionWarning;
 
     if (input.include_images) {

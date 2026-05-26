@@ -1,4 +1,4 @@
-import type { ExtractInput, ExtractOutput, StageResult } from '../types.js';
+import type { ExtractInput, ExtractOutput, StageResult, TableData } from '../types.js';
 import type { SmartRouter } from '../fetch/router.js';
 import { extractMetadata, extractSelector, extractTables } from '../extraction/extract.js';
 import {
@@ -109,6 +109,41 @@ function clampExtractData(
   return data;
 }
 
+// H3: default char ceiling for mode='tables' when caller didn't pass
+// max_tokens_out. Large tables blow token budgets; this default keeps the
+// response useful for the common case while flipping `truncated: true` so
+// callers can detect the clip and re-request explicitly if they need more.
+const TABLES_DEFAULT_MAX_CHARS = 30000;
+
+// Trim a tables payload to fit within `maxChars`. Drops rows tail-first while
+// preserving the table's header so the structural shape stays intact.
+function clampTablesToChars(
+  data: ExtractOutput['data'],
+  maxChars: number,
+): { data: ExtractOutput['data']; truncated: boolean } {
+  if (!Array.isArray(data)) return { data, truncated: false };
+  const serialized = JSON.stringify(data);
+  if (serialized.length <= maxChars) return { data, truncated: false };
+
+  // Clone shallowly so we don't mutate the source array.
+  const tables = (data as TableData[]).map((t) => ({
+    caption: t.caption,
+    headers: [...t.headers],
+    rows: [...t.rows],
+  })) as TableData[];
+
+  // Pop rows from the last table first; if it empties, pop the table itself.
+  while (JSON.stringify(tables).length > maxChars && tables.length > 0) {
+    const last = tables[tables.length - 1];
+    if (last.rows.length > 0) {
+      last.rows.pop();
+    } else {
+      tables.pop();
+    }
+  }
+  return { data: tables, truncated: true };
+}
+
 function buildSuccessOutput(
   data: ExtractOutput['data'],
   sourceUrl: string | undefined,
@@ -117,10 +152,21 @@ function buildSuccessOutput(
   warnings?: string[],
   startMs?: number,
 ): StageResult<ExtractOutput> {
-  const finalData = maxTokens !== undefined ? clampExtractData(data, maxTokens) : data;
+  let finalData = data;
+  let truncated = false;
+  if (maxTokens !== undefined) {
+    finalData = clampExtractData(data, maxTokens);
+  } else if (mode === 'tables') {
+    // Default-cap path for tables — only runs when the caller didn't pass an
+    // explicit budget. Surfaces `truncated: true` on clip so callers can detect.
+    const clamped = clampTablesToChars(data, TABLES_DEFAULT_MAX_CHARS);
+    finalData = clamped.data;
+    truncated = clamped.truncated;
+  }
   const out: ExtractOutput = { data: finalData, source_url: sourceUrl, mode };
   if (warnings && warnings.length > 0) out.warnings = warnings;
   if (typeof startMs === 'number') out.response_time_ms = Date.now() - startMs;
+  if (truncated) out.truncated = true;
   return { ok: true, data: out };
 }
 

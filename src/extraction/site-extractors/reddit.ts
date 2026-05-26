@@ -272,6 +272,9 @@ export const redditExtractor: Extractor = {
       links: [],
       images: [],
       extractor: 'site-specific',
+      // Structured thread record threaded outward so routedExtract can surface
+      // it on the FetchOutput without re-parsing the HTML a second time.
+      site_data: thread as unknown as Record<string, unknown>,
     };
   },
 };

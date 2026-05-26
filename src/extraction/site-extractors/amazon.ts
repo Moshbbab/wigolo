@@ -478,6 +478,9 @@ export const amazonExtractor: Extractor = {
       links: [],
       images: product.images,
       extractor: 'site-specific',
+      // Structured product record threaded outward so routedExtract can surface
+      // it on the FetchOutput without re-parsing the HTML a second time.
+      site_data: product as unknown as Record<string, unknown>,
     };
   },
 };

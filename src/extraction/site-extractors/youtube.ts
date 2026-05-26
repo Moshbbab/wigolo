@@ -374,22 +374,30 @@ export const youtubeExtractor: Extractor = {
 
     const markdown = buildMarkdown(youtubeMeta, title || videoId, description);
 
+    // Build the site_data record up-front so the structured contract lives on
+    // its own typed slot (see ExtractionResult.site_data). The legacy untyped
+    // copy on .metadata is kept for backwards compatibility with callers that
+    // still read it from there; both views are populated from the same source.
+    const siteData: Record<string, unknown> = {
+      video_id: youtubeMeta.video_id,
+      channel: youtubeMeta.channel,
+      duration: youtubeMeta.duration,
+      duration_seconds: youtubeMeta.duration_seconds,
+      view_count: youtubeMeta.view_count,
+      posted_at: youtubeMeta.posted_at,
+      chapters: youtubeMeta.chapters,
+      caption_tracks: youtubeMeta.caption_tracks,
+      transcript: youtubeMeta.transcript,
+      playability_status: youtubeMeta.playability_status,
+    };
+    const resolvedTitle = title || videoId;
+    if (resolvedTitle) siteData.title = resolvedTitle;
+
     return {
-      title: title || videoId,
+      title: resolvedTitle,
       markdown,
       metadata: {
-        ...({
-          video_id: youtubeMeta.video_id,
-          channel: youtubeMeta.channel,
-          duration: youtubeMeta.duration,
-          duration_seconds: youtubeMeta.duration_seconds,
-          view_count: youtubeMeta.view_count,
-          posted_at: youtubeMeta.posted_at,
-          chapters: youtubeMeta.chapters,
-          caption_tracks: youtubeMeta.caption_tracks,
-          transcript: youtubeMeta.transcript,
-          playability_status: youtubeMeta.playability_status,
-        } as Record<string, unknown>),
+        ...(siteData as Record<string, unknown>),
         description,
         author: channel,
         date: postedAt,
@@ -397,6 +405,7 @@ export const youtubeExtractor: Extractor = {
       links: [],
       images: [],
       extractor: 'site-specific',
+      site_data: siteData,
     };
   },
 };

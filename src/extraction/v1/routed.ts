@@ -76,8 +76,11 @@ function trySiteExtractors(
   const extractors = getSiteExtractors();
   const match = extractors.find((e) => e.canHandle(url, originalHtml));
   if (!match) return null;
-  const out = match.extract(cleanedHtml, url);
-  return out ?? null;
+  // Site extractors that emit a structured record populate `site_data`
+  // directly on the ExtractionResult (see reddit / amazon / youtube). The
+  // structured shape is built once, inside the extractor's single HTML
+  // parse — no re-parse, no helper re-call here.
+  return match.extract(cleanedHtml, url);
 }
 
 async function fallbackChain(

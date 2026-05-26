@@ -202,3 +202,138 @@ describe('routedExtract — site-specific extractors run first', () => {
     expect(result).toBeDefined();
   });
 });
+
+describe('routedExtract — single-parse perf guard (P1 perf regression)', () => {
+  // Why this block exists: the v0.3.0 site_data wiring re-invoked the exported
+  // parse helpers (extractRedditThread / extractAmazonProduct) inside
+  // routedExtract → buildSiteData, which meant every Reddit/Amazon fetch
+  // parsed the HTML and walked the DOM twice. This block pins the fix: the
+  // routed layer must read the structured record off the ExtractionResult
+  // that the extractor already built — zero external re-invocations of the
+  // parse helpers from outside the extractor module.
+  //
+  // vi.spyOn patches the module namespace object — only external (cross-file)
+  // calls to the exported binding are observed. The internal call inside
+  // redditExtractor.extract / amazonExtractor.extract uses the local function
+  // reference and stays invisible to the spy. That is the property we want:
+  // 0 spy hits === no external re-parse from routed.ts.
+  it('does not re-invoke extractRedditThread externally on a reddit fixture (no double parse)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const reddit = await import('../../../../src/extraction/site-extractors/reddit.js');
+    const spy = vi.spyOn(reddit, 'extractRedditThread');
+
+    const fx = readFileSync(
+      join(import.meta.dirname, '../../../fixtures/site-extractors/reddit-thread.html'),
+      'utf-8',
+    );
+    const result = await routedExtract({
+      html: fx,
+      url: 'https://old.reddit.com/r/programming/comments/abc123/whats_your_favorite_typescript_trick/',
+    });
+
+    // Pre-fix: routed.ts called extractRedditThread → spy hit 1 time.
+    // Post-fix: routed.ts reads ExtractionResult.site_data → spy hit 0 times.
+    expect(spy).toHaveBeenCalledTimes(0);
+    expect(result.site_data).toBeDefined();
+    spy.mockRestore();
+  });
+
+  it('does not re-invoke extractAmazonProduct externally on an amazon fixture (no double parse)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const amazon = await import('../../../../src/extraction/site-extractors/amazon.js');
+    const spy = vi.spyOn(amazon, 'extractAmazonProduct');
+
+    const fx = readFileSync(
+      join(import.meta.dirname, '../../../fixtures/amazon/electronics.html'),
+      'utf-8',
+    );
+    const result = await routedExtract({
+      html: fx,
+      url: 'https://www.amazon.com/dp/B08N5WRWNW/',
+    });
+
+    // Pre-fix: routed.ts called extractAmazonProduct → spy hit 1 time.
+    // Post-fix: routed.ts reads ExtractionResult.site_data → spy hit 0 times.
+    expect(spy).toHaveBeenCalledTimes(0);
+    expect(result.site_data).toBeDefined();
+    spy.mockRestore();
+  });
+});
+
+describe('routedExtract — site_data passthrough (P1 regression guard)', () => {
+  // Why these tests exist: slice unit tests passed at the extractor boundary
+  // but the structured `SiteExtractionResult` was getting flattened into
+  // markdown by the routed wiring. These tests pin the passthrough at the
+  // routed-extract layer — one level below the integration test in
+  // tests/integration/fetch-site-data.test.ts.
+  it('omits site_data for URLs that no site extractor handles', async () => {
+    mockClassify.mockReturnValue('generic');
+    mockDefuddle.mockResolvedValue(res({ extractor: 'defuddle' }));
+
+    const result = await routedExtract({
+      html: HTML,
+      url: 'https://example.com/some/random/page',
+    });
+
+    expect(result.site_data).toBeUndefined();
+  });
+
+  it('attaches site_data when the reddit extractor matches', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const fx = readFileSync(
+      join(import.meta.dirname, '../../../fixtures/site-extractors/reddit-thread.html'),
+      'utf-8',
+    );
+    const result = await routedExtract({
+      html: fx,
+      url: 'https://old.reddit.com/r/programming/comments/abc123/whats_your_favorite_typescript_trick/',
+    });
+
+    expect(result.site_data).toBeDefined();
+    const site = result.site_data as Record<string, unknown>;
+    expect(site.subreddit).toBe('programming');
+    expect(typeof site.score).toBe('number');
+    expect(Array.isArray(site.comments)).toBe(true);
+  });
+
+  it('attaches site_data when the youtube extractor matches', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const fx = readFileSync(
+      join(import.meta.dirname, '../../../fixtures/site-extractors/youtube-watch-with-captions.html'),
+      'utf-8',
+    );
+    const result = await routedExtract({
+      html: fx,
+      url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    });
+
+    expect(result.site_data).toBeDefined();
+    const site = result.site_data as Record<string, unknown>;
+    expect(site.video_id).toBe('dQw4w9WgXcQ');
+    expect(Array.isArray(site.caption_tracks)).toBe(true);
+    expect(Array.isArray(site.chapters)).toBe(true);
+  });
+
+  it('attaches site_data when the amazon extractor matches', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const fx = readFileSync(
+      join(import.meta.dirname, '../../../fixtures/amazon/electronics.html'),
+      'utf-8',
+    );
+    const result = await routedExtract({
+      html: fx,
+      url: 'https://www.amazon.com/dp/B08N5WRWNW/',
+    });
+
+    expect(result.site_data).toBeDefined();
+    const site = result.site_data as Record<string, unknown>;
+    expect(site.asin).toBe('B08N5WRWNW');
+    expect(typeof site.price).toBe('number');
+    expect(Array.isArray(site.features)).toBe(true);
+  });
+});

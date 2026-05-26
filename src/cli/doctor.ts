@@ -471,7 +471,7 @@ const DOCTOR_CHILD_ENV = 'WIGOLO_DOCTOR_CHILD';
 // already complete. The onnxruntime global thread pool races libc++ during
 // static destructor teardown on macOS; we strip these lines from inherited
 // child stderr so users do not see a fake-looking crash trailer.
-function isPostExitNativeNoise(line: string): boolean {
+export function isPostExitNativeNoise(line: string): boolean {
   return (
     line.startsWith('libc++abi:') ||
     line.includes('mutex lock failed: Invalid argument') ||
@@ -516,7 +516,7 @@ export async function runDoctorIsolated(dataDir: string): Promise<number> {
   return runDoctorAsChild(dataDir);
 }
 
-async function runDoctorAsChild(dataDir: string): Promise<number> {
+export async function runDoctorAsChild(dataDir: string): Promise<number> {
   // Allow opt-out for environments where spawning is undesirable (tests,
   // sandboxed CI). The fallback runs doctor in-process — the libc++ abort
   // is still possible but the exit code from runDoctor itself is returned.

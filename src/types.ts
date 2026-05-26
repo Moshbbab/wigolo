@@ -314,6 +314,26 @@ export interface EngineTelemetry {
   error?: string;
 }
 
+/**
+ * Slice S1 (M2): top-level engine failure surface. Engine errors used to
+ * be visible only when callers opted into `include_engine_outcomes` — that
+ * meant a 401 (missing token) or 400 (engine outage) only showed up in
+ * debug-shaped telemetry. `engine_warnings` promotes the same information
+ * to the default response so every caller sees broken engines without
+ * extra flags. For 401s on engines that document an API-key env var, the
+ * `hint` field names the var so users can fix the gap quickly.
+ */
+export interface EngineWarning {
+  engine: string;
+  /** Stable failure code: 'http_4xx' / 'http_5xx' / 'http_<code>' / generic
+   * 'error' for non-HTTP failures (DNS, abort, timeout). */
+  code: string;
+  /** One-line human-readable explanation drawn from the engine's error. */
+  message?: string;
+  /** Actionable next step, e.g. "set WIGOLO_GITHUB_TOKEN to lift the 401". */
+  hint?: string;
+}
+
 export type FreshnessConfidence =
   | 'extracted'
   | 'inferred-url'
@@ -380,6 +400,12 @@ export interface SearchOutput {
    * per-engine name, latency, result count, outcome, and how many of that
    * engine's results survived dedup into the final fused list. */
   engine_telemetry?: EngineTelemetry[];
+  /** Slice S1 (M2): top-level failure surface, always emitted on the
+   * engine-pool path (empty array when no engine errored). Promotes
+   * `engine_telemetry.outcome === 'error'` entries into a flat list with a
+   * stable failure code + optional env-var hint so callers branch on
+   * engine health without parsing telemetry. */
+  engine_warnings?: EngineWarning[];
   /** Set to `quota_exceeded` when format=answer hit a provider quota wall
    * (e.g. gemini free-tier 429) and the result is a heuristic fallback. */
   synthesis_status?: 'quota_exceeded';

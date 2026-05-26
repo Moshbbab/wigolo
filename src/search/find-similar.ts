@@ -248,12 +248,15 @@ export async function findSimilar(
     }
 
     const queryForNote = (input.concept?.trim() || input.url?.trim() || '').slice(0, 200);
+    const conceptMode = !!input.concept?.trim() && !input.url?.trim();
     const baseNote = buildColdStartNote(
       cacheHits,
       searchHits,
       embeddingAvailable,
       initialCacheSize,
       initialEmbedIndexSize,
+      conceptMode,
+      finalResults.length,
     );
     const weakNote = weakSignal
       ? buildWeakSignalNote(queryForNote, topRawScore, coldStartThreshold)
@@ -320,6 +323,8 @@ function buildColdStartNote(
   embeddingAvailable: boolean,
   initialCacheSize: number,
   initialEmbedIndexSize: number,
+  conceptMode: boolean,
+  finalResultCount: number,
 ): string | undefined {
   if (initialCacheSize === 0) {
     return 'Cache is empty. Results come from live web search only. Use wigolo_fetch / wigolo_crawl to warm the cache, then re-run find_similar for hybrid local+web ranking.';
@@ -330,6 +335,25 @@ function buildColdStartNote(
   // embedding-unavailable hint because it's actionable per-query.
   if (cacheHits === 0 && searchHits > 0) {
     return `No cache matches for this query (cache has ${initialCacheSize} pages overall). Results come from live web search. Use wigolo_fetch on relevant sources before re-running for hybrid ranking.`;
+  }
+  // Slice S7 (H9): audit case "retrieval augmented generation" → 1
+  // unrelated cache hit, no cold_start, no signal to caller. When concept
+  // mode returns very few results AND search wasn't used to corroborate,
+  // tell the caller the local-cache signal is thin. Bound at <= 2 because
+  // that's the threshold the audit case demonstrates — a single Deployment
+  // page returned for an unrelated query.
+  //
+  // Guard with `initialCacheSize >= 3` so the existing "cache is small"
+  // notes still win when the cache is essentially empty (those are
+  // system-level posture signals; H9 is a per-query thinness signal).
+  if (
+    conceptMode &&
+    searchHits === 0 &&
+    finalResultCount > 0 &&
+    finalResultCount <= 2 &&
+    initialCacheSize >= 3
+  ) {
+    return `Only ${finalResultCount} cache match${finalResultCount === 1 ? '' : 'es'} for this concept query (cache has ${initialCacheSize} pages overall). The result is a thin local-cache signal and may not be representative. Enable include_web=true or run wigolo_crawl on relevant sources to corroborate.`;
   }
   if (!embeddingAvailable && initialCacheSize > 0) {
     return 'Embeddings unavailable or index empty (cached pages have not been embedded yet). Falling back to FTS5 keyword ranking. Set up sentence-transformers to enable semantic matching.';

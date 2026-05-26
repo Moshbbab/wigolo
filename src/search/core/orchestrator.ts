@@ -59,6 +59,7 @@ function applyBrandCollisionGuard(query: string, results: RawSearchResult[]): Ra
     return r;
   });
 }
+import { resolveEngineWeight } from './engine-quality.js';
 import { getGeneralEngines, _resetGeneralEnginesForTest } from './verticals/general.js';
 import { getNewsEngines, _resetNewsEnginesForTest } from './verticals/news.js';
 import { getCodeEngines, _resetCodeEnginesForTest } from './verticals/code.js';
@@ -279,7 +280,15 @@ export async function runV1Search(
     // Replace results in outcome to keep telemetry consistent with what we fused.
     outcome.results = dedupedResults;
 
-    const weight = entries[i].weight ?? 1;
+    // S11c: tier-based weights take precedence over the legacy numeric
+    // `weight`. Falls back to the per-vertical numeric weight when no
+    // quality tier is set, preserving existing behaviour for engines that
+    // haven't been classified by S11b yet.
+    const weight = resolveEngineWeight(
+      entries[i].engine.name,
+      entries[i].weight,
+      entries[i].quality,
+    );
     const isSecondary = entries[i].secondary === true;
     for (let j = 0; j < dedupedResults.length; j++) {
       const r = dedupedResults[j];

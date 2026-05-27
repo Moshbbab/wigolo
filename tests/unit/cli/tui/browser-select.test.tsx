@@ -16,7 +16,8 @@ describe('BrowserSelect', () => {
   it('renders browser options', () => {
     const { lastFrame } = render(<BrowserSelect onComplete={() => {}} />);
     const frame = lastFrame()!;
-    expect(frame).toContain('Lightpanda');
+    // SP1: Lightpanda removed; only Chromium and Firefox are offered
+    expect(frame).not.toContain('Lightpanda');
     expect(frame).toContain('Chromium');
     expect(frame).toContain('Firefox');
   });
@@ -34,6 +35,7 @@ describe('BrowserSelect', () => {
     // Press enter to select the first (default) option
     stdin.write('\r');
     await new Promise((r) => setTimeout(r, 50));
-    expect(onComplete).toHaveBeenCalledWith('lightpanda');
+    // SP1: Lightpanda removed; default first option is Chromium
+    expect(onComplete).toHaveBeenCalledWith('chromium');
   });
 });

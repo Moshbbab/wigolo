@@ -114,13 +114,6 @@ export async function initSubsystems(): Promise<Subsystems> {
   });
   const router = new SmartRouter(httpClient, browserPool);
 
-  if (config.lightpandaEnabled && config.lightpandaUrl) {
-    log.info('lightpanda browser backend enabled', {
-      url: config.lightpandaUrl,
-      failureThreshold: config.lightpandaFailureThreshold,
-    });
-  }
-
   const backendStatus = new BackendStatus();
 
   const searchEngines: SearchEngine[] = [

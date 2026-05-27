@@ -18,7 +18,7 @@ vi.mock('../../../src/cli/tui/run-command.js', () => ({
 }));
 
 vi.mock('node:fs', () => ({
-  existsSync: vi.fn().mockImplementation((p) => String(p).endsWith('lightpanda')),
+  existsSync: vi.fn().mockReturnValue(false),
   readFileSync: vi.fn(),
   rmSync: vi.fn(),
   mkdirSync: vi.fn(),

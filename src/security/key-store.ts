@@ -50,6 +50,38 @@ export const PICKER_PROVIDERS: ReadonlyArray<LLMProvider | 'custom'> = [
 // All providers that can have keystore entries (including groq via env only)
 const STORE_PROVIDERS: ReadonlyArray<LLMProvider> = ['anthropic', 'openai', 'gemini', 'groq'];
 
+/**
+ * Process-lifetime memo for resolveProviderKey, keyed by `provider:dataDir`.
+ *
+ * Without this, every format=answer search resolves the key twice (the
+ * isLlmConfigured check + the actual runLlmText call), and on the encrypted-
+ * file tier each resolution runs scrypt (~40-80ms). The memo collapses that
+ * to a single decrypt per process and is invalidated whenever a key is
+ * stored or deleted, so a re-keying in the TUI takes effect immediately.
+ *
+ * Values: a resolved string, or `null` for a verified miss (so repeated
+ * misses don't re-probe keychain/file/env every call). `undefined` (absent
+ * key) is stored as `null`.
+ */
+const _resolveMemo = new Map<string, string | null>();
+
+function memoKey(provider: LLMProvider, dataDir: string): string {
+  return `${provider}:${dataDir}`;
+}
+
+/** Drop every memo entry for a provider across all data dirs. */
+function invalidateMemo(provider: LLMProvider): void {
+  const prefix = `${provider}:`;
+  for (const k of _resolveMemo.keys()) {
+    if (k.startsWith(prefix)) _resolveMemo.delete(k);
+  }
+}
+
+/** Test/maintenance hook: clear the entire resolve memo. */
+export function clearKeyStoreMemo(): void {
+  _resolveMemo.clear();
+}
+
 /** Returns the keychain service name for a given provider. */
 function keychainKey(provider: LLMProvider): string {
   return `${WIGOLO_SERVICE}-${provider}`;
@@ -70,15 +102,20 @@ export async function storeKey(
   value: string,
   opts: KeyStoreOpts,
 ): Promise<{ location: 'keychain' | 'file' }> {
+  // Invalidate before the write so a concurrent reader can't cache a stale miss
+  // between the write completing and this line running.
+  invalidateMemo(provider);
   if (keychainAvailable()) {
     try {
       keychainSet(keychainKey(provider), provider, value);
+      invalidateMemo(provider);
       return { location: 'keychain' };
     } catch {
       // Keychain call failed despite availability probe — fall through to file.
     }
   }
   await encryptToFile(value, opts.dataDir, encFilePath(provider, opts.dataDir));
+  invalidateMemo(provider);
   return { location: 'file' };
 }
 
@@ -127,22 +164,42 @@ export async function deleteKey(
   if (existsSync(filePath)) {
     try { unlinkSync(filePath); } catch { /* ignore */ }
   }
+  invalidateMemo(provider);
 }
 
 /**
  * Full resolution chain: keychain → file → env.
  * Returns the raw key value or undefined if none configured.
  * NEVER mutates process.env.
+ *
+ * Memoization: only the EXPENSIVE keychain/file tier is memoized (a `string`
+ * hit, or `null` for a verified keychain+file miss). The env tier is read
+ * live on every call and never cached, so an env-var change is always picked
+ * up and the value never goes stale. The memo collapses the repeated scrypt
+ * decrypt / keychain probe that the synthesis hot path triggers (the
+ * isLlmConfigured check + the runLlmText call), and is invalidated by
+ * storeKey/deleteKey so a TUI re-keying takes effect immediately.
  */
 export async function resolveProviderKey(
   provider: LLMProvider,
   opts: KeyStoreOpts,
 ): Promise<string | undefined> {
-  // 1 + 2: keychain and file
-  const stored = await readKey(provider, opts);
-  if (stored !== null) return stored.value;
+  const cacheKey = memoKey(provider, opts.dataDir);
 
-  // 3: env var (read-only)
+  let storedValue: string | null;
+  if (_resolveMemo.has(cacheKey)) {
+    // Memo hit: keychain/file result is cached (value or verified miss).
+    storedValue = _resolveMemo.get(cacheKey) ?? null;
+  } else {
+    // 1 + 2: keychain and file (the expensive tiers).
+    const stored = await readKey(provider, opts);
+    storedValue = stored ? stored.value : null;
+    _resolveMemo.set(cacheKey, storedValue);
+  }
+  if (storedValue !== null) return storedValue;
+
+  // 3: env var (read-only, ALWAYS live — never memoized so env changes and
+  // per-test env teardown are respected).
   const envVar = providerEnvVar(provider);
   const envValue = process.env[envVar];
   return envValue || undefined;

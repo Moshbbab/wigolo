@@ -22,7 +22,7 @@ vi.mock('../../../src/security/keychain.js', () => {
 const keychainMod = await import('../../../src/security/keychain.js');
 const { _store } = keychainMod as typeof keychainMod & { _store: Map<string, string> };
 
-const { storeKey } = await import('../../../src/security/key-store.js');
+const { storeKey, clearKeyStoreMemo } = await import('../../../src/security/key-store.js');
 const { selectProviderWithKeyStore } = await import('../../../src/integrations/cloud/llm/select.js');
 
 describe('selectProviderWithKeyStore', () => {
@@ -31,6 +31,7 @@ describe('selectProviderWithKeyStore', () => {
 
   beforeEach(() => {
     _store.clear();
+    clearKeyStoreMemo();
     tmpDir = mkdtempSync(join(tmpdir(), 'wigolo-select-test-'));
     process.env = { ...origEnv };
     delete process.env.ANTHROPIC_API_KEY;
@@ -60,9 +61,11 @@ describe('selectProviderWithKeyStore', () => {
     expect(result?.provider).toBe('gemini');
   });
 
-  it('falls back to env-keyed provider when no keystore match', () => {
+  it('falls back to env-keyed provider when no keystore match', async () => {
     process.env.ANTHROPIC_API_KEY = 'env-key';
-    // This is synchronous env-only path — reachable because no keystore entry
+    const result = await selectProviderWithKeyStore(process.env, { dataDir: tmpDir });
+    expect(result?.provider).toBe('anthropic');
+    expect(result?.key).toBe('env-key');
   });
 
   it('returns null when neither keystore nor env has a key', async () => {

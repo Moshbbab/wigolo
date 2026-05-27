@@ -32,6 +32,7 @@ const {
   deleteKey,
   resolveProviderKey,
   listProviders,
+  clearKeyStoreMemo,
 } = await import('../../../src/security/key-store.js');
 
 describe('keychain tier (keychainAvailable = true)', () => {
@@ -39,6 +40,7 @@ describe('keychain tier (keychainAvailable = true)', () => {
 
   beforeEach(() => {
     _store.clear();
+    clearKeyStoreMemo();
     vi.mocked(keychainAvailable).mockReturnValue(true);
     tmpDir = mkdtempSync(join(tmpdir(), 'wigolo-ks-test-'));
   });
@@ -88,6 +90,7 @@ describe('file fallback tier (keychainAvailable = false)', () => {
 
   beforeEach(() => {
     _store.clear();
+    clearKeyStoreMemo();
     vi.mocked(keychainAvailable).mockReturnValue(false);
     tmpDir = mkdtempSync(join(tmpdir(), 'wigolo-ks-file-test-'));
   });
@@ -124,6 +127,7 @@ describe('listProviders', () => {
 
   beforeEach(() => {
     _store.clear();
+    clearKeyStoreMemo();
     vi.mocked(keychainAvailable).mockReturnValue(true);
     tmpDir = mkdtempSync(join(tmpdir(), 'wigolo-list-test-'));
   });
@@ -148,5 +152,63 @@ describe('listProviders', () => {
   it('returns empty array when no providers stored', async () => {
     const list = await listProviders({ dataDir: tmpDir });
     expect(list).toEqual([]);
+  });
+});
+
+describe('resolveProviderKey memo invalidation', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    _store.clear();
+    clearKeyStoreMemo();
+    vi.mocked(keychainAvailable).mockReturnValue(true);
+    tmpDir = mkdtempSync(join(tmpdir(), 'wigolo-memo-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+    vi.clearAllMocks();
+    delete process.env.ANTHROPIC_API_KEY;
+  });
+
+  it('returns the new value after storeKey (memo invalidated on store)', async () => {
+    // First resolve: miss → memoized as null
+    const first = await resolveProviderKey('anthropic', { dataDir: tmpDir });
+    expect(first).toBeUndefined();
+
+    // Store a key — must invalidate the memoized miss
+    await storeKey('anthropic', 'new-key', { dataDir: tmpDir });
+
+    const second = await resolveProviderKey('anthropic', { dataDir: tmpDir });
+    expect(second).toBe('new-key');
+  });
+
+  it('returns updated value after re-keying (memo reflects the latest store)', async () => {
+    await storeKey('openai', 'old-key', { dataDir: tmpDir });
+    expect(await resolveProviderKey('openai', { dataDir: tmpDir })).toBe('old-key');
+
+    // Re-key — memo must invalidate so the new value is returned
+    await storeKey('openai', 'rotated-key', { dataDir: tmpDir });
+    expect(await resolveProviderKey('openai', { dataDir: tmpDir })).toBe('rotated-key');
+  });
+
+  it('returns undefined after deleteKey (memo invalidated on delete)', async () => {
+    await storeKey('gemini', 'gm-key', { dataDir: tmpDir });
+    expect(await resolveProviderKey('gemini', { dataDir: tmpDir })).toBe('gm-key');
+
+    await deleteKey('gemini', { dataDir: tmpDir });
+    expect(await resolveProviderKey('gemini', { dataDir: tmpDir })).toBeUndefined();
+  });
+
+  it('memoizes a hit so a second resolve does not re-probe the keychain', async () => {
+    await storeKey('anthropic', 'cached-key', { dataDir: tmpDir });
+    // Prime the memo
+    await resolveProviderKey('anthropic', { dataDir: tmpDir });
+    const callsAfterFirst = vi.mocked(keychainGet).mock.calls.length;
+
+    // Second resolve should hit the memo, not the keychain
+    const result = await resolveProviderKey('anthropic', { dataDir: tmpDir });
+    expect(result).toBe('cached-key');
+    expect(vi.mocked(keychainGet).mock.calls.length).toBe(callsAfterFirst);
   });
 });

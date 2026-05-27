@@ -38,19 +38,41 @@ function loadKeyring(): KeyringModule | null {
   }
 }
 
-/** Returns true if the OS keychain is accessible. */
+let _available: boolean | null = null;
+
+/**
+ * Returns true if the OS keychain is accessible.
+ *
+ * Cached for the process lifetime: keychain availability is a static property
+ * of the host (binary loaded + Entry constructable) that does not change
+ * between calls. Probing on every key resolution constructed a fresh Entry
+ * 8+ times per synthesis — wasted work, now collapsed to one probe.
+ */
 export function keychainAvailable(): boolean {
+  if (_available !== null) return _available;
   const mod = loadKeyring();
-  if (!mod) return false;
+  if (!mod) {
+    _available = false;
+    return false;
+  }
   // Try a no-op probe: instantiate Entry without actually calling setPassword.
   // If the binary loaded but the OS keychain is sandboxed, setPassword would
   // throw; we let storeKey handle that per-call, not here.
   try {
     new mod.Entry('wigolo-probe', 'probe');
+    _available = true;
     return true;
   } catch {
+    _available = false;
     return false;
   }
+}
+
+/** Test hook: reset the cached availability probe + module load state. */
+export function _resetKeychainAvailability(): void {
+  _available = null;
+  _checked = false;
+  _keyring = null;
 }
 
 const WIGOLO_SERVICE = 'wigolo';

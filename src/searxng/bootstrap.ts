@@ -115,8 +115,8 @@ export interface BackendResolution {
 export function checkPythonAvailable(): boolean {
   try {
     const python = resolvePythonExe();
-    execSync(`${python} --version`, { stdio: 'pipe' });
-    return true;
+    const r = spawnSync(python, ['--version'], { stdio: 'pipe' });
+    return r.status === 0 && !r.error;
   } catch {
     return false;
   }

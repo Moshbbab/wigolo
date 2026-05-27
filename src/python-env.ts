@@ -22,6 +22,8 @@ export function venvBinPath(
   return join(dataDir, 'searxng', 'venv', 'bin', name);
 }
 
+let _resolvedPythonExe: string | null = null;
+
 /**
  * Returns the first Python interpreter found on PATH: tries `python3` then
  * `python`. Falls back to the string `'python3'` when neither is detected so
@@ -29,11 +31,19 @@ export function venvBinPath(
  * silently passing an empty string.
  *
  * Reuses `binaryInPath()` which already handles `which` vs `where` (Windows).
+ * Result is memoized — the interpreter set does not change within a process,
+ * so warm-path callers avoid repeated `which`/`where` subprocess spawns.
  */
 export function resolvePythonExe(): string {
-  if (binaryInPath('python3') !== null) return 'python3';
-  if (binaryInPath('python') !== null) return 'python';
-  return 'python3'; // conventional fallback — will fail at spawn with a clear error
+  if (_resolvedPythonExe !== null) return _resolvedPythonExe;
+  if (binaryInPath('python3') !== null) return (_resolvedPythonExe = 'python3');
+  if (binaryInPath('python') !== null) return (_resolvedPythonExe = 'python');
+  return (_resolvedPythonExe = 'python3'); // conventional fallback — fails at spawn with a clear error
+}
+
+/** Test-only: clear the memoized interpreter so platform-mocked tests re-resolve. */
+export function __resetResolvedPythonExe(): void {
+  _resolvedPythonExe = null;
 }
 
 /**

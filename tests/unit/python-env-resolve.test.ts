@@ -5,16 +5,27 @@ vi.mock('../../src/cli/tui/detect-helpers.js', () => ({
 }));
 
 import { binaryInPath } from '../../src/cli/tui/detect-helpers.js';
-import { resolvePythonExe } from '../../src/python-env.js';
+import { resolvePythonExe, __resetResolvedPythonExe } from '../../src/python-env.js';
 
 describe('resolvePythonExe', () => {
-  beforeEach(() => { vi.clearAllMocks(); });
+  beforeEach(() => { vi.clearAllMocks(); __resetResolvedPythonExe(); });
 
   it('returns python3 when python3 is present', () => {
     vi.mocked(binaryInPath).mockImplementation((name) =>
       name === 'python3' ? '/usr/bin/python3' : null,
     );
     expect(resolvePythonExe()).toBe('python3');
+  });
+
+  it('memoizes the result across calls within a process', () => {
+    vi.mocked(binaryInPath).mockImplementation((name) =>
+      name === 'python3' ? '/usr/bin/python3' : null,
+    );
+    expect(resolvePythonExe()).toBe('python3');
+    vi.mocked(binaryInPath).mockClear();
+    // second call must not re-probe PATH
+    expect(resolvePythonExe()).toBe('python3');
+    expect(binaryInPath).not.toHaveBeenCalled();
   });
 
   it('falls back to python when only python is present', () => {

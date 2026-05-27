@@ -3,6 +3,7 @@ import { resetConfig } from '../../../src/config.js';
 
 vi.mock('node:child_process', () => ({
   execSync: vi.fn(),
+  spawnSync: vi.fn(),
 }));
 
 vi.mock('node:fs', async () => {
@@ -17,9 +18,15 @@ vi.mock('node:fs', async () => {
   };
 });
 
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { checkPythonAvailable, checkDockerAvailable, getBootstrapState, setBootstrapState, generateSettings, resolveSearchBackend } from '../../../src/searxng/bootstrap.js';
+import { __resetResolvedPythonExe } from '../../../src/python-env.js';
+
+type SpawnResult = ReturnType<typeof spawnSync>;
+function spawnResult(status: number, error?: Error): SpawnResult {
+  return { status, error, stdout: '', stderr: '', signal: null, pid: 1, output: [] } as unknown as SpawnResult;
+}
 
 describe('SearXNG bootstrap', () => {
   const originalEnv = process.env;
@@ -28,18 +35,31 @@ describe('SearXNG bootstrap', () => {
     process.env = { ...originalEnv };
     resetConfig();
     vi.clearAllMocks();
+    __resetResolvedPythonExe();
   });
 
-  afterEach(() => { process.env = originalEnv; resetConfig(); });
+  afterEach(() => { process.env = originalEnv; resetConfig(); __resetResolvedPythonExe(); });
 
   describe('checkPythonAvailable', () => {
-    it('returns true when python3 is available', () => {
-      vi.mocked(execSync).mockReturnValue(Buffer.from('Python 3.11.0'));
+    it('returns true when python is available', () => {
+      // both the `which/where python3` probe and the `python3 --version` run succeed
+      vi.mocked(spawnSync).mockReturnValue(spawnResult(0));
       expect(checkPythonAvailable()).toBe(true);
     });
 
-    it('returns false when python3 is not found', () => {
-      vi.mocked(execSync).mockImplementation(() => { throw new Error('not found'); });
+    it('returns false when python --version exits non-zero', () => {
+      vi.mocked(spawnSync).mockImplementation((cmd) => {
+        const name = String(cmd);
+        // detection probe (which/where) succeeds so resolvePythonExe returns python3,
+        // but the actual `python3 --version` invocation fails.
+        if (name === 'which' || name === 'where') return spawnResult(0);
+        return spawnResult(1);
+      });
+      expect(checkPythonAvailable()).toBe(false);
+    });
+
+    it('returns false when spawnSync errors', () => {
+      vi.mocked(spawnSync).mockReturnValue(spawnResult(null as unknown as number, new Error('ENOENT')));
       expect(checkPythonAvailable()).toBe(false);
     });
   });

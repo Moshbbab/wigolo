@@ -9,7 +9,7 @@ vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
   return {
     ...actual,
-    existsSync: vi.fn().mockImplementation((p) => String(p).endsWith('lightpanda')),
+    existsSync: vi.fn().mockReturnValue(false),
     readFileSync: vi.fn(),
     writeFileSync: vi.fn(),
     mkdirSync: vi.fn(),

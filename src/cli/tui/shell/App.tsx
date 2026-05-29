@@ -8,6 +8,7 @@ import { CommandPalette } from './CommandPalette.js';
 import { HelpOverlay } from './HelpOverlay.js';
 import type { PaletteEntry } from './palette-index.js';
 import type { ActivityStore } from '../state/activity-store.js';
+import { useShellWidth } from './width.js';
 
 export const DEFAULT_ROUTES: readonly SidebarRoute[] = [
   { id: 'browser',   label: 'Browser',       group: 'settings' },
@@ -48,25 +49,53 @@ interface AppProps {
   activityStore?: ActivityStore;
 }
 
+function computeBreadcrumb(routeId: string | undefined, routes: readonly SidebarRoute[], paneTitle: string): string {
+  const rid = routeId ?? 'home';
+  if (rid === 'home') return 'Home';
+  if (rid.startsWith('category:')) {
+    return `Settings › ${paneTitle}`;
+  }
+  if (rid.startsWith('action:')) {
+    return `Actions › ${paneTitle}`;
+  }
+  const route = routes.find((r) => r.id === rid);
+  if (route) {
+    const prefix = route.group === 'settings' ? 'Settings' : 'Actions';
+    return `${prefix} › ${route.label}`;
+  }
+  return paneTitle;
+}
+
 export function App(props: AppProps): JSX.Element {
   const routes = props.routes ?? DEFAULT_ROUTES;
+  const width = useShellWidth();
+  const breadcrumb = computeBreadcrumb(props.routeId, routes, props.paneTitle);
   return (
     <FooterProvider>
       <Box flexDirection="column" height="100%">
-        <Header status={props.status} pending={props.pending} toast={props.toast} activityStore={props.activityStore} />
+        <Header
+          status={props.status}
+          pending={props.pending}
+          toast={props.toast}
+          activityStore={props.activityStore}
+          width={width}
+          breadcrumb={breadcrumb}
+        />
         <Box flexGrow={1}>
-          <Sidebar
-            routes={routes}
-            activeRoute={props.activeRoute}
-            dirtyByCategory={props.dirtyByCategory}
-            onSelect={props.onSelectRoute}
-            focused={props.focusedPane === 'sidebar'}
-          />
+          {width === 'wide' && (
+            <Sidebar
+              routes={routes}
+              activeRoute={props.activeRoute}
+              dirtyByCategory={props.dirtyByCategory}
+              onSelect={props.onSelectRoute}
+              focused={props.focusedPane === 'sidebar'}
+            />
+          )}
           <MainPane title={props.paneTitle} focused={props.focusedPane === 'main'} routeId={props.routeId ?? props.activeRoute}>
             {props.children}
           </MainPane>
         </Box>
-        <Footer />
+        <Footer width={width} />
         {props.paletteOpen && props.paletteEntries && props.onPalettePick && props.onPaletteClose && (
           <Box position="absolute" marginLeft={4} marginTop={2}>
             <CommandPalette

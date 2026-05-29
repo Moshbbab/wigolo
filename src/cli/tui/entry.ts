@@ -7,7 +7,7 @@
  * picks one of two mountable modes plus a `firstRun` and `headless` flag.
  *
  * `runEntry()` is the side-effecting twin: calls `resolveEntry()` then
- * either mounts the new Ink shell (slice 5's `InkRouter`) with the proper
+ * either mounts the new Ink shell (`InkRoot`) with the proper
  * initial view (SettingsHome or 4-step Wizard) or returns a headless code
  * path so the caller can fall back to its own plain renderer.
  *

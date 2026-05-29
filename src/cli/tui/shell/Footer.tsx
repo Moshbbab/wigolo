@@ -2,6 +2,7 @@ import { Box, Text } from 'ink';
 import { createContext, useCallback, useContext, useEffect, useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { semantic } from '../theme/palette.js';
+import type { ShellWidth } from './width.js';
 
 type Hints = readonly string[];
 
@@ -61,9 +62,22 @@ export function useFooterHints(hints: Hints): void {
   }, [hintsKey]);
 }
 
-export function Footer(): JSX.Element {
+export function Footer({ width }: { width?: ShellWidth }): JSX.Element {
   const ctx = useContext(FooterContext);
   const top = ctx ? Array.from(ctx.stack.values()).at(-1) ?? [] : [];
+
+  if (width === 'tiny' && top.length > 0) {
+    const mid = Math.ceil(top.length / 2);
+    const firstLine = top.slice(0, mid);
+    const secondLine = top.slice(mid);
+    return (
+      <Box flexDirection="column" paddingX={1}>
+        <Text color={semantic.textDim}>{firstLine.join(' · ')}</Text>
+        {secondLine.length > 0 && <Text color={semantic.textDim}>{secondLine.join(' · ')}</Text>}
+      </Box>
+    );
+  }
+
   return (
     <Box paddingX={1}>
       <Text color={semantic.textDim}>{top.join(' · ')}</Text>

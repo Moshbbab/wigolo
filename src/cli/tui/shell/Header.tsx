@@ -4,6 +4,7 @@ import { semantic, palette } from '../theme/palette.js';
 import { reducedMotion } from '../theme/motion-guard.js';
 import { spinner } from '../theme/motion.js';
 import type { ActivityStore } from '../state/activity-store.js';
+import type { ShellWidth } from './width.js';
 import type { ReactNode } from 'react';
 import { useState, useEffect } from 'react';
 
@@ -23,6 +24,8 @@ export function Header(props: {
   pending: number;
   toast: { message: string; severity: Status } | null;
   activityStore?: ActivityStore;
+  width?: ShellWidth;
+  breadcrumb?: string;
 }): JSX.Element {
   const rm = reducedMotion();
 
@@ -70,7 +73,11 @@ export function Header(props: {
 
   const gradientColors = GRADIENT_PHASES[gradientPhase];
 
-  const title: ReactNode = rm ? (
+  const width = props.width ?? 'wide';
+
+  const title: ReactNode = width !== 'wide' ? (
+    <Text color={semantic.textDim}>{props.breadcrumb ?? 'wigolo'}</Text>
+  ) : rm ? (
     <Text color={semantic.accent} bold>wigolo</Text>
   ) : (
     <Gradient colors={[...gradientColors]}><Text bold>wigolo</Text></Gradient>
@@ -81,10 +88,10 @@ export function Header(props: {
       {title}
       <Box gap={2}>
         <Text color={dotColor}>{dotChar}</Text>
-        {props.pending > 0 && (
+        {width !== 'tiny' && props.pending > 0 && (
           <Text color={semantic.accent}>{props.pending} pending</Text>
         )}
-        {props.toast && (
+        {width !== 'tiny' && props.toast && (
           <Text color={toastColor(props.toast.severity)}>{props.toast.message}</Text>
         )}
       </Box>

@@ -2,10 +2,6 @@
  * InkRoot — production entry (named export). Wraps the router in the App shell
  * (Header / Sidebar / Footer). entry.ts renders WizardSteps directly when
  * phase === 'wizard'; all post-wizard navigation flows through InkRoot.
- *
- * InkRouter (default export) is the legacy unwrapped router retained for
- * backwards-compat with SP6-era unit tests. It is NOT used in production.
- * See the @deprecated JSDoc on InkRouter for removal timeline.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useInput } from 'ink';
@@ -29,83 +25,6 @@ type ScreenView =
   | { kind: 'action'; id: SettingsHomeAction };
 
 const ACTION_LABELS = ['Verify', 'Doctor', 'Export', 'Import', 'Uninstall'];
-
-export interface InkRouterProps {
-  store: SettingsStore;
-  catalog: ReadonlyArray<CategoryDef>;
-  onExit: () => void;
-  version?: string;
-  productName?: string;
-}
-
-/**
- * @deprecated Retained for SP6-era unit tests; will be removed in SP10 cleanup.
- * Production code path uses the named export {@link InkRoot} which wraps screens in the shell.
- */
-export default function InkRouter(props: InkRouterProps): React.ReactElement {
-  const { store, catalog, onExit, version, productName } = props;
-
-  const [view, setView] = useState<ScreenView>({ kind: 'home' });
-
-  const goHome = useCallback(() => setView({ kind: 'home' }), []);
-
-  const onSelectCategory = useCallback((id: CategoryId) => {
-    setView({ kind: 'category', id });
-  }, []);
-
-  const onAction = useCallback((action: SettingsHomeAction) => {
-    setView({ kind: 'action', id: action });
-  }, []);
-
-  if (view.kind === 'category') {
-    const category = catalog.find((c) => c.id === view.id);
-    if (!category) {
-      // Defensive — should never happen because SettingsHome only emits ids
-      // sourced from the same catalog. Drop back to home instead of crashing.
-      return (
-        <SettingsHome
-          store={store}
-          catalog={catalog}
-          onSelectCategory={onSelectCategory}
-          onAction={onAction}
-          onQuit={onExit}
-          version={version}
-          productName={productName}
-        />
-      );
-    }
-    return (
-      <CategoryScreen category={category} store={store} onBack={goHome} />
-    );
-  }
-
-  if (view.kind === 'action') {
-    switch (view.id) {
-      case 'verify':
-        return <VerifyScreen onBack={goHome} />;
-      case 'doctor':
-        return <DoctorScreen onBack={goHome} />;
-      case 'export':
-        return <DashboardExport onBack={goHome} />;
-      case 'import':
-        return <ImportScreen store={store} catalog={catalog} onBack={goHome} />;
-      case 'uninstall':
-        return <DashboardUninstall onBack={goHome} />;
-    }
-  }
-
-  return (
-    <SettingsHome
-      store={store}
-      catalog={catalog}
-      onSelectCategory={onSelectCategory}
-      onAction={onAction}
-      onQuit={onExit}
-      version={version}
-      productName={productName}
-    />
-  );
-}
 
 // ---------------------------------------------------------------------------
 // InkRoot — production shell compositor (SP6+)

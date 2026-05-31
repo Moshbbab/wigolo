@@ -82,7 +82,7 @@ describe('VS Code descriptor', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('detects when project .vscode dir exists', () => {
-    vi.mocked(dirExists).mockImplementation((p) => p === '/proj/.vscode');
+    vi.mocked(dirExists).mockImplementation((p) => p === join('/proj', '.vscode'));
     expect(getDescriptor('vscode').detect(ENV)).toBe(true);
   });
 
@@ -99,13 +99,13 @@ describe('VS Code descriptor', () => {
   });
 
   it('configPath prefers project .vscode/mcp.json', () => {
-    vi.mocked(dirExists).mockImplementation((p) => p === '/proj/.vscode');
-    expect(getDescriptor('vscode').configPath(ENV)).toBe('/proj/.vscode/mcp.json');
+    vi.mocked(dirExists).mockImplementation((p) => p === join('/proj', '.vscode'));
+    expect(getDescriptor('vscode').configPath(ENV)).toBe(join('/proj', '.vscode', 'mcp.json'));
   });
 
   it('configPath falls back to ~/.vscode/mcp.json', () => {
     vi.mocked(dirExists).mockReturnValue(false);
-    expect(getDescriptor('vscode').configPath(ENV)).toBe('/home/test/.vscode/mcp.json');
+    expect(getDescriptor('vscode').configPath(ENV)).toBe(join('/home/test', '.vscode', 'mcp.json'));
   });
 });
 

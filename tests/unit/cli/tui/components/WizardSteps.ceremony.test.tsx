@@ -26,6 +26,7 @@ afterEach(() => {
 });
 
 const ENTER = '\r';
+const DOWN = '\x1b[B';
 
 const wait = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -57,18 +58,24 @@ async function driveToFinish(
   stdin: { write: (s: string) => void },
   saveImpl: ReturnType<typeof vi.fn>,
 ): Promise<void> {
-  // Step 1 → Step 2
+  // Step 1 → Step 2 (Enter on Begin row)
   await wait(30);
   stdin.write(ENTER);
-  // Step 2 system check resolves
-  await wait(80);
+  // Step 2: system check resolves; Enter on Continue row → Step 3
+  await wait(100);
   stdin.write(ENTER);
-  // Step 3 (LLM) → Step 4
-  await wait(40);
-  stdin.write(ENTER);
-  // Step 4 (Agents) → finish
+  // Step 3 (LLM): navigate past 2 fields to Continue row, then Enter → Step 4
+  await wait(50);
+  stdin.write(DOWN); // → field 1 (API key)
+  await wait(30);
+  stdin.write(DOWN); // → Continue row
+  await wait(30);
+  stdin.write(ENTER); // → Step 4
+  // Step 4 (Agents): navigate past 1 field to Finish row, then Enter → save
   await wait(60);
-  stdin.write(ENTER);
+  stdin.write(DOWN); // → Finish row
+  await wait(30);
+  stdin.write(ENTER); // → trigger save
   // Allow save to resolve
   await wait(80);
 }

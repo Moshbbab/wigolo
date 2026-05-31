@@ -8,7 +8,7 @@ const PULSE_TTL = 500;
 export interface SidebarRoute {
   id: string;
   label: string;
-  group: 'settings' | 'actions';
+  group: 'settings' | 'actions' | 'exit';
 }
 
 export interface SidebarProps {
@@ -85,6 +85,7 @@ export function Sidebar({ routes, activeRoute, dirtyByCategory, onSelect, focuse
 
   const settingsRoutes = routes.filter(r => r.group === 'settings');
   const actionsRoutes = routes.filter(r => r.group === 'actions');
+  const exitRoutes = routes.filter(r => r.group === 'exit');
 
   const renderRow = (r: SidebarRoute, globalIndex: number) => {
     const isCursor = focused && globalIndex === cursor;
@@ -109,6 +110,15 @@ export function Sidebar({ routes, activeRoute, dirtyByCategory, onSelect, focuse
       <Text color={semantic.textMuted}>────────────────────</Text>
       <Text color={semantic.textDim} bold>ACTIONS</Text>
       {actionsRoutes.map((r, i) => renderRow(r, settingsRoutes.length + i))}
+      {exitRoutes.length > 0 && (
+        <>
+          <Text color={semantic.textMuted}>────────────────────</Text>
+          <Text color={semantic.textDim} bold>EXIT</Text>
+          {exitRoutes.map((r, i) =>
+            renderRow(r, settingsRoutes.length + actionsRoutes.length + i),
+          )}
+        </>
+      )}
     </Box>
   );
 }

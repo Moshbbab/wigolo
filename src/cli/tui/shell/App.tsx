@@ -22,6 +22,7 @@ export const DEFAULT_ROUTES: readonly SidebarRoute[] = [
   { id: 'export',    label: 'Export',        group: 'actions'  },
   { id: 'import',    label: 'Import',        group: 'actions'  },
   { id: 'uninstall', label: 'Uninstall',     group: 'actions'  },
+  { id: 'quit',      label: 'Quit',          group: 'exit'     },
 ];
 
 interface AppProps {
@@ -62,7 +63,7 @@ function computeBreadcrumb(routeId: string | undefined, routes: readonly Sidebar
   }
   const route = routes.find((r) => r.id === rid);
   if (route) {
-    const prefix = route.group === 'settings' ? 'Settings' : 'Actions';
+    const prefix = route.group === 'settings' ? 'Settings' : route.group === 'exit' ? 'Exit' : 'Actions';
     return `${prefix} › ${route.label}`;
   }
   return paneTitle;

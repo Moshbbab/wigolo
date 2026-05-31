@@ -14,7 +14,7 @@
  * blocks on completion: on save failure the wizard surfaces a one-line
  * error and still proceeds to home so the user can recover.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { semantic } from '../theme/palette.js';
 import type { CategoryDef } from '../schema/types.js';
@@ -27,9 +27,6 @@ import {
   type SystemCheckResult,
 } from '../system-check.js';
 import { defaultConfigPath } from '../../../persisted-config.js';
-
-/** One Ink render cycle plus margin — prevents double-advance on rapid Enter. */
-const ADVANCE_GUARD_MS = 50;
 
 type StepIndex = 1 | 2 | 3 | 4 | 5;
 
@@ -77,8 +74,23 @@ interface WelcomeStepProps {
 }
 
 function WelcomeStep(props: WelcomeStepProps): React.ReactElement {
+  // 0 = "Begin" / content row; 1 = Quit row
+  const [focusedRow, setFocusedRow] = useState(0);
+
   useInput((_input, key) => {
+    if (key.downArrow) {
+      setFocusedRow((r) => Math.min(1, r + 1));
+      return;
+    }
+    if (key.upArrow) {
+      setFocusedRow((r) => Math.max(0, r - 1));
+      return;
+    }
     if (key.return) {
+      if (focusedRow === 1) {
+        props.onSkip();
+        return;
+      }
       props.onNext();
       return;
     }
@@ -86,12 +98,34 @@ function WelcomeStep(props: WelcomeStepProps): React.ReactElement {
       props.onSkip();
     }
   });
+
+  const beginFocused = focusedRow === 0;
+  const quitFocused = focusedRow === 1;
+
   return (
     <Box flexDirection="column">
       <StepHeader step={1} />
       <Text>Welcome to wigolo — local-first web intelligence for AI agents.</Text>
       <Box marginTop={1}>
         <Text dimColor>Press Enter to begin · Esc to skip and use defaults</Text>
+      </Box>
+      <Box marginTop={1} flexDirection="column">
+        <Box flexDirection="row">
+          <Text>
+            {beginFocused ? <Text color={semantic.accent}>{'❯ '}</Text> : '  '}
+            <Text bold={beginFocused} color={semantic.accent} inverse={beginFocused}>
+              {'Begin'}
+            </Text>
+          </Text>
+        </Box>
+        <Box flexDirection="row">
+          <Text>
+            {quitFocused ? <Text color={semantic.accent}>{'❯ '}</Text> : '  '}
+            <Text bold={quitFocused} color={semantic.textDim}>
+              {'Quit'}
+            </Text>
+          </Text>
+        </Box>
       </Box>
     </Box>
   );
@@ -106,6 +140,8 @@ interface SystemStepProps {
 function SystemStep(props: SystemStepProps): React.ReactElement {
   const [result, setResult] = useState<SystemCheckResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 0 = Continue row; 1 = Quit row
+  const [focusedRow, setFocusedRow] = useState(0);
 
   useEffect(() => {
     const impl = props.runSystemCheckImpl ?? runSystemCheck;
@@ -123,15 +159,32 @@ function SystemStep(props: SystemStepProps): React.ReactElement {
     };
   }, [props.runSystemCheckImpl]);
 
+  const ready = result !== null || error !== null;
+
   useInput((_input, key) => {
+    if (key.downArrow) {
+      setFocusedRow((r) => Math.min(1, r + 1));
+      return;
+    }
+    if (key.upArrow) {
+      setFocusedRow((r) => Math.max(0, r - 1));
+      return;
+    }
     if (key.escape) {
       props.onSkip();
       return;
     }
-    if (key.return && (result !== null || error !== null)) {
-      props.onNext();
+    if (key.return) {
+      if (focusedRow === 1) {
+        props.onSkip();
+        return;
+      }
+      if (ready) props.onNext();
     }
   });
+
+  const continueFocused = focusedRow === 0;
+  const quitFocused = focusedRow === 1;
 
   return (
     <Box flexDirection="column">
@@ -169,6 +222,28 @@ function SystemStep(props: SystemStepProps): React.ReactElement {
       ) : null}
       <Box marginTop={1}>
         <Text dimColor>Press Enter to continue · Esc to skip remaining steps</Text>
+      </Box>
+      <Box marginTop={1} flexDirection="column">
+        <Box flexDirection="row">
+          <Text>
+            {continueFocused ? <Text color={semantic.accent}>{'❯ '}</Text> : '  '}
+            <Text
+              bold={continueFocused}
+              color={ready ? semantic.accent : semantic.textDim}
+              inverse={continueFocused && ready}
+            >
+              {'Continue'}
+            </Text>
+          </Text>
+        </Box>
+        <Box flexDirection="row">
+          <Text>
+            {quitFocused ? <Text color={semantic.accent}>{'❯ '}</Text> : '  '}
+            <Text bold={quitFocused} color={semantic.textDim}>
+              {'Quit'}
+            </Text>
+          </Text>
+        </Box>
       </Box>
     </Box>
   );
@@ -361,24 +436,6 @@ export function WizardSteps(props: WizardStepsProps): React.ReactElement {
     }
   }, [step, runFinish]);
 
-  // Guard against re-entrancy: if Enter fires twice quickly, only the
-  // first invocation should advance.
-  const advancingRef = useRef(false);
-
-  useInput(
-    (_input, key) => {
-      if (key.return && !advancingRef.current) {
-        advancingRef.current = true;
-        advanceFromCategory();
-        // Reset after a tick so subsequent Enter presses on the next step work.
-        setTimeout(() => {
-          advancingRef.current = false;
-        }, ADVANCE_GUARD_MS);
-      }
-    },
-    { isActive: (step === 3 || step === 4) && !setupComplete },
-  );
-
   // Ceremony screen shown after a successful finish.
   if (setupComplete) {
     return <SetupComplete onDone={onDone} />;
@@ -407,12 +464,17 @@ export function WizardSteps(props: WizardStepsProps): React.ReactElement {
       <Box flexDirection="column">
         <StepHeader step={3} />
         <CategoryScreen
+          key="wizard-step-3"
           category={llmCategory}
           store={store}
           onBack={onSkip}
+          extraRows={[
+            { label: 'Continue', onActivate: advanceFromCategory },
+            { label: 'Quit', onActivate: onSkip, dim: true },
+          ]}
         />
         <Box marginTop={1}>
-          <Text dimColor>⏎ continue · Esc to skip remaining steps</Text>
+          <Text dimColor>↑↓ field · ⏎ edit · ↓ to Continue · esc skip · q quit</Text>
         </Box>
       </Box>
     );
@@ -426,9 +488,14 @@ export function WizardSteps(props: WizardStepsProps): React.ReactElement {
     <Box flexDirection="column">
       <StepHeader step={4} />
       <CategoryScreen
+        key="wizard-step-4"
         category={agentsCategory}
         store={store}
         onBack={onSkip}
+        extraRows={[
+          { label: 'Finish', onActivate: advanceFromCategory },
+          { label: 'Quit', onActivate: onSkip, dim: true },
+        ]}
       />
       {saving ? (
         <Box marginTop={1}>
@@ -441,7 +508,7 @@ export function WizardSteps(props: WizardStepsProps): React.ReactElement {
         </Box>
       ) : null}
       <Box marginTop={1}>
-        <Text dimColor>⏎ Finish · Esc to skip and use defaults</Text>
+        <Text dimColor>↑↓ field · ⏎ edit · ↓ to Finish · esc skip · q quit</Text>
       </Box>
     </Box>
   );

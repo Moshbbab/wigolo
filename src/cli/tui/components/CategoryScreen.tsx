@@ -12,15 +12,28 @@
  *                    is called which autosaves the field to disk.
  *   - esc          → cancel current edit, OR call `onBack()` when idle
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import type { CategoryDef, FieldDef, Ctx } from '../schema/types.js';
 import type { SettingsStore } from '../state/settings-store.js';
 import { FieldRenderer } from './FieldRenderer.js';
 import { ActionBar, type ActionBarHotkey } from './ActionBar.js';
+import { semantic } from '../theme/palette.js';
 import { createLogger } from '../../../logger.js';
 
 const logger = createLogger('cli');
+
+export interface ExtraRowDef {
+  /** Row label, e.g. "Continue", "Finish", "Quit". */
+  label: string;
+  /** Called when Enter is pressed while this row is focused. */
+  onActivate: () => void;
+  /**
+   * When true, renders the row in a muted/dim style (e.g. Quit).
+   * When false/absent, renders with accent highlight (e.g. Continue/Finish).
+   */
+  dim?: boolean;
+}
 
 export interface CategoryScreenProps {
   category: CategoryDef;
@@ -29,10 +42,16 @@ export interface CategoryScreenProps {
   onEditBufferChange?: (editing: boolean) => void;
   /** If set, CategoryScreen initialises focus on the field with this key. */
   initialFocusKey?: string;
+  /**
+   * Extra focusable rows appended after all fields (e.g. Continue, Quit in wizard).
+   * Arrow-down past the last field lands on the first extra row.
+   * Absent in regular SettingsHome → CategoryScreen navigation.
+   */
+  extraRows?: ReadonlyArray<ExtraRowDef>;
 }
 
 export function CategoryScreen(props: CategoryScreenProps): React.ReactElement {
-  const { category, store, onBack, onEditBufferChange, initialFocusKey } = props;
+  const { category, store, onBack, onEditBufferChange, initialFocusKey, extraRows } = props;
 
   // Force a re-render whenever the store mutates so pending markers + the
   // ActionBar count stay in sync with edits.
@@ -78,14 +97,22 @@ export function CategoryScreen(props: CategoryScreenProps): React.ReactElement {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Total navigable rows = visible fields + extra rows (Continue, Quit, etc.)
+  const extraRowCount = extraRows?.length ?? 0;
+  const totalNavRows = visibleFields.length + extraRowCount;
+
   // Clamp focus if the visible-field list shrinks (e.g. a conditional flipped).
   useEffect(() => {
-    if (focusedIndex >= visibleFields.length && visibleFields.length > 0) {
-      setFocusedIndex(visibleFields.length - 1);
+    if (focusedIndex >= totalNavRows && totalNavRows > 0) {
+      setFocusedIndex(totalNavRows - 1);
     }
-  }, [visibleFields.length, focusedIndex]);
+  }, [totalNavRows, focusedIndex]);
 
   const pendingCount = store.dirtyKeys().length;
+
+  // Whether the cursor is on an extra row (index >= visibleFields.length).
+  const isOnExtraRow = focusedIndex >= visibleFields.length;
+  const extraRowIndex = isOnExtraRow ? focusedIndex - visibleFields.length : -1;
 
   useInput((input, key) => {
     // While editing, FieldRenderer owns the keyboard. We only listen for
@@ -98,11 +125,17 @@ export function CategoryScreen(props: CategoryScreenProps): React.ReactElement {
     }
     if (key.downArrow) {
       setFocusedIndex((i) =>
-        visibleFields.length === 0 ? 0 : Math.min(visibleFields.length - 1, i + 1),
+        totalNavRows === 0 ? 0 : Math.min(totalNavRows - 1, i + 1),
       );
       return;
     }
     if (key.return) {
+      // If cursor is on an extra row (Continue / Quit), activate it.
+      if (isOnExtraRow) {
+        const row = extraRows?.[extraRowIndex];
+        row?.onActivate();
+        return;
+      }
       // Only kinds with an edit buffer (text/number/path) transition into a
       // sustained "editing" mode. Select / toggle / readonly are atomic and
       // FieldRenderer handles them in a single keystroke.
@@ -175,6 +208,28 @@ export function CategoryScreen(props: CategoryScreenProps): React.ReactElement {
           );
         })}
       </Box>
+
+      {extraRows && extraRows.length > 0 && (
+        <Box flexDirection="column" marginTop={1}>
+          {extraRows.map((row, idx) => {
+            const rowFocused = isOnExtraRow && idx === extraRowIndex;
+            return (
+              <Box key={row.label} flexDirection="row">
+                <Text>
+                  {rowFocused ? <Text color={semantic.accent}>{'❯ '}</Text> : '  '}
+                  <Text
+                    bold={rowFocused}
+                    color={row.dim ? semantic.textDim : semantic.accent}
+                    inverse={rowFocused && !row.dim}
+                  >
+                    {row.label}
+                  </Text>
+                </Text>
+              </Box>
+            );
+          })}
+        </Box>
+      )}
 
       <ActionBar pendingCount={pendingCount} hotkeys={hotkeys} />
     </Box>

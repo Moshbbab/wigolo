@@ -99,25 +99,29 @@ describe('WizardSteps', () => {
     await wait(30);
     expect(lastFrame() ?? '').toContain('Step 1 / 4');
 
-    // Step 1 → Step 2
+    // Step 1 → Step 2 (Enter on Welcome's Begin row)
     stdin.write(ENTER);
     await wait(40);
     expect(lastFrame() ?? '').toContain('Step 2 / 4');
 
-    // Wait for the system check to resolve, then advance to step 3.
+    // Wait for the system check to resolve, then advance to step 3 via Continue row.
     await wait(60);
     stdin.write(ENTER);
     await wait(40);
     expect(lastFrame() ?? '').toContain('Step 3 / 4');
 
-    // Step 3 (LLM) — visible hint changed from 's continue' to '⏎ continue'.
-    expect(lastFrame() ?? '').toContain('⏎ continue');
+    // Step 3 (LLM) — updated hint text shows navigation cue.
+    expect(lastFrame() ?? '').toContain('↓ to Continue');
 
-    // Press Enter to advance to step 4.
-    stdin.write(ENTER);
+    // LLM category has 2 fields (Provider, API key). Navigate past both to Continue row.
+    stdin.write('\x1b[B'); // ↓ field 0 → field 1
+    await wait(25);
+    stdin.write('\x1b[B'); // ↓ field 1 → Continue
+    await wait(25);
+    stdin.write(ENTER);   // Enter on Continue → advance to step 4
     await wait(60);
     expect(lastFrame() ?? '').toContain('Step 4 / 4');
-    expect(lastFrame() ?? '').toContain('⏎ Finish');
+    expect(lastFrame() ?? '').toContain('Finish');
   });
 
   it('Esc on the Welcome step skips to home (onSkip fires)', async () => {
@@ -194,19 +198,25 @@ describe('WizardSteps', () => {
       />,
     );
 
-    // Welcome → System
+    // Welcome → System (Enter on Begin row)
     await wait(30);
     stdin.write(ENTER);
     await wait(40);
-    // System → LLM (after the check resolves)
+    // System → LLM (after check resolves, Enter on Continue row)
     await wait(60);
     stdin.write(ENTER);
     await wait(40);
-    // LLM → Agents (Enter advances per new ⏎ continue hint)
-    stdin.write(ENTER);
+    // LLM has 2 fields; navigate past them to Continue row, then Enter.
+    stdin.write('\x1b[B'); // ↓ → field 1
+    await wait(25);
+    stdin.write('\x1b[B'); // ↓ → Continue
+    await wait(25);
+    stdin.write(ENTER);    // Enter on Continue → step 4
     await wait(60);
-    // Agents → save (Enter triggers ⏎ Finish)
-    stdin.write(ENTER);
+    // Agents category has a multiselect field; navigate to Finish row (1 field).
+    stdin.write('\x1b[B'); // ↓ → Finish
+    await wait(25);
+    stdin.write(ENTER);    // Enter on Finish → save
     await wait(80);
     // Save+install complete; ceremony screen is now showing.
     // Press Enter to dismiss the Setup complete ceremony.

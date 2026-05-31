@@ -304,6 +304,10 @@ export function InkRoot(props: InkRootProps): React.ReactElement {
   }, []);
 
   const handleSelectRoute = useCallback((id: string) => {
+    if (id === 'quit') {
+      onExit();
+      return;
+    }
     const route = DEFAULT_ROUTES.find((r) => r.id === id);
     if (!route) return;
     if (route.group === 'settings') {
@@ -312,7 +316,7 @@ export function InkRoot(props: InkRootProps): React.ReactElement {
       setView({ kind: 'action', id: id as SettingsHomeAction });
     }
     setFocusedPane('main');
-  }, []);
+  }, [onExit]);
 
   const activeRoute = computeActiveRoute(view);
   const routeId = computeRouteId(view);

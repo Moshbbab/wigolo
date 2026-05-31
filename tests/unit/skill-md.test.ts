@@ -3,7 +3,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 function parseYamlFrontmatter(content: string): Record<string, unknown> | null {
-  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  // Normalize CRLF -> LF up front so the rest of the parser only deals with
+  // LF-delimited lines. Windows git checkout converts text files to CRLF by
+  // default; without this normalization the delimiter regex misses and the
+  // entire frontmatter is dropped. `.gitattributes` also pins *.md to LF as
+  // belt-and-suspenders, but the parser should not depend on that.
+  const normalized = content.replace(/\r\n/g, '\n');
+  const match = normalized.match(/^---\n([\s\S]*?)\n---/);
   if (!match) return null;
   const yaml = match[1];
   const result: Record<string, unknown> = {};
@@ -85,8 +91,11 @@ describe('SKILL.md — v3 structure and content', () => {
 
   it('has YAML frontmatter delimiters', () => {
     content = readFileSync(SKILL_PATH, 'utf-8');
-    expect(content.startsWith('---\n')).toBe(true);
-    expect(content.indexOf('\n---', 4)).toBeGreaterThan(4);
+    // Tolerate both LF (Unix/macOS) and CRLF (Windows git checkout) line
+    // endings. The closing delimiter must appear past the opening one, so
+    // search starts at index 4 (right after the opening `---\n` or `---\r\n`).
+    expect(/^---\r?\n/.test(content)).toBe(true);
+    expect(content.search(/\r?\n---/)).toBeGreaterThan(3);
   });
 
   it('body does not exceed 500 lines', () => {

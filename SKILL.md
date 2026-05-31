@@ -2,7 +2,7 @@
 name: wigolo
 description: Local-first web intelligence MCP server for AI coding agents. Eight tools for search, fetch, crawl, cache, extract, find similar, research, and agent-driven data gathering. No API keys. Results cached in a local knowledge store.
 author: KnockOutEZ
-license: BUSL-1.1
+license: PolyForm-Noncommercial-1.0.0
 repository: https://github.com/KnockOutEZ/wigolo
 transport: stdio
 install: npx @staticn0va/wigolo
@@ -379,4 +379,4 @@ Full list: see `src/config.ts`.
 
 - Repository: https://github.com/KnockOutEZ/wigolo
 - npm: https://www.npmjs.com/package/@staticn0va/wigolo
-- License: BUSL-1.1 (converts to AGPL-3.0 on 2029-04-12)
+- License: PolyForm Noncommercial 1.0.0 — free for noncommercial use; commercial use requires a separate license (contact ktowhid20@gmail.com)

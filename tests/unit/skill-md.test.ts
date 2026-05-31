@@ -111,7 +111,7 @@ describe('SKILL.md — v3 structure and content', () => {
     expect(typeof frontmatter!.description).toBe('string');
     expect((frontmatter!.description as string).length).toBeGreaterThan(20);
     expect(frontmatter!.author).toBe('KnockOutEZ');
-    expect(frontmatter!.license).toBe('BUSL-1.1');
+    expect(frontmatter!.license).toBe('PolyForm-Noncommercial-1.0.0');
     expect(frontmatter!.repository).toContain('github.com/KnockOutEZ/wigolo');
     expect(frontmatter!.transport).toBe('stdio');
     expect(frontmatter!.install).toContain('npx @staticn0va/wigolo');

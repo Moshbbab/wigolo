@@ -265,4 +265,8 @@ npm run dev           # tsx src/index.ts
 
 ## License
 
-BUSL-1.1 — see `LICENSE`.
+[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) — free for noncommercial use (personal, research, education, hobby, charity, government).
+
+Commercial use by or for any company requires a separate commercial license or sponsorship. Contact <ktowhid20@gmail.com>.
+
+Full terms: see `LICENSE`.

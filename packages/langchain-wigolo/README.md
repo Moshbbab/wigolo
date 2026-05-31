@@ -86,4 +86,4 @@ LangChain `BaseTool` wrappers for wigolo search and fetch.
 
 ## License
 
-AGPL-3.0-or-later
+[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) — same license as the parent wigolo project. Free for noncommercial use; commercial use requires a separate commercial license or sponsorship (contact <ktowhid20@gmail.com>). Full terms in the root `LICENSE`.

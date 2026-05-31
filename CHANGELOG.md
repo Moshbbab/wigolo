@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### License change (BREAKING for commercial users)
+
+wigolo is now distributed under the [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0), replacing the previous Business Source License 1.1 (root) and AGPL-3.0-or-later (`wigolo-ai-sdk` subpackage). The repository is now a single license everywhere.
+
+- **Noncommercial users** (personal, research, education, hobby, charity, government): no action required. Continue using wigolo freely.
+- **Commercial users** (any company, sole proprietorship, or organization using wigolo for the benefit of a commercial entity): you now require a separate commercial license or sponsorship arrangement. Contact <ktowhid20@gmail.com>.
+
+The new license removes the previous BUSL change-date conversion to AGPL — there is no longer a scheduled open-source transition. The change is intentional: wigolo's commercial-rights model is now a single, plain-English license rather than a multi-layered time-bombed structure.
+
 ## v0.1.22 — 2026-05-27
 
 Audit-driven gap closure batch: 12 slices (S1–S8 + S11a–d) lift the wigolo gap-closure score from 5.4 to 7.4. Additive; no breaking API changes — existing callers continue to work; new defaults are tighter where they were silently wrong. Full audit at `docs/superpowers/audits/2026-05-27-wigolo-gap-closure-v2.md`.

@@ -144,7 +144,13 @@ export WIGOLO_LLM_PROVIDER=http://localhost:11434   # Ollama / vLLM / LM Studio
 
 # or cloud — better-written synthesis, one cheap call per report:
 export WIGOLO_LLM_PROVIDER=anthropic                # key goes to the OS keychain, never config.json
+export WIGOLO_LLM_API_KEY=sk-...                    # key for whichever provider WIGOLO_LLM_PROVIDER names
 ```
+
+For a cloud provider you can supply the key either via the provider-specific var
+(`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_API_KEY` / `GROQ_API_KEY`) or via the
+generic `WIGOLO_LLM_API_KEY`, which applies to whichever provider `WIGOLO_LLM_PROVIDER`
+names. The provider-specific var wins when both are set.
 
 For synthesizing already-retrieved evidence, a local 7–8B model is plenty. Reach for cloud only when you're shipping a report.
 
@@ -303,6 +309,7 @@ Everything you can set, with a one-line description each. Collapsed to keep this
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | — | Read on every call; never persisted. |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Either name accepted. |
 | `GROQ_API_KEY` | — | Same. |
+| `WIGOLO_LLM_API_KEY` | — | Generic key for whichever provider `WIGOLO_LLM_PROVIDER` names. Last-resort env fallback — the provider-specific var above wins, and it is ignored during auto-detect (no explicit provider). |
 
 Keys can also live in the OS keychain or an AES-encrypted file (`wigolo init` / `wigolo config`) — never in `config.json`.
 

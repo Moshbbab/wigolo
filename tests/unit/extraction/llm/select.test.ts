@@ -45,4 +45,27 @@ describe('selectProvider', () => {
       }),
     ).toBe('anthropic');
   });
+
+  it('WIGOLO_LLM_API_KEY satisfies an explicit provider (#102)', () => {
+    expect(
+      selectProvider({
+        WIGOLO_LLM_PROVIDER: 'gemini',
+        WIGOLO_LLM_API_KEY: 'x',
+      }),
+    ).toBe('gemini');
+  });
+
+  it('WIGOLO_LLM_API_KEY is ignored without an explicit provider', () => {
+    expect(selectProvider({ WIGOLO_LLM_API_KEY: 'x' })).toBeNull();
+  });
+
+  it('provider-specific var wins over WIGOLO_LLM_API_KEY', () => {
+    expect(
+      selectProvider({
+        WIGOLO_LLM_PROVIDER: 'gemini',
+        GOOGLE_API_KEY: 'g',
+        WIGOLO_LLM_API_KEY: 'x',
+      }),
+    ).toBe('gemini');
+  });
 });

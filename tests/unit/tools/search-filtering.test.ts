@@ -24,6 +24,7 @@ vi.mock('../../../src/logger.js', () => ({
 vi.mock('../../../src/cache/store.js', () => ({
   getCachedSearchResults: vi.fn().mockReturnValue(null),
   cacheSearchResults: vi.fn(),
+  buildSearchCacheKey: vi.fn((query: string) => query.toLowerCase().trim()),
   normalizeUrl: vi.fn((url: string) => url),
 }));
 

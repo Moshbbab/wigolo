@@ -261,6 +261,78 @@ describe('CategoryScreen', () => {
     expect(focusLine).toContain('Max concurrent');
   });
 
+  // Bug #105 — after wigolo is installed into an agent, the multiselect row's
+  // "installed" hint stayed stale until the app restarted because options are
+  // schema-static and never recomputed. CategoryScreen now accepts a
+  // `decorateField` seam plus a `refreshSignal`: when the signal changes the
+  // decorator re-runs, letting the parent inject freshly-detected hints so the
+  // checkbox/hint reflects install state immediately.
+  it('decorateField recomputes options when refreshSignal changes (install-state refresh)', async () => {
+    const agentsCategory: CategoryDef = {
+      id: 'agents',
+      label: 'MCP Agents',
+      description: 'agents',
+      fields: [
+        {
+          key: 'WIGOLO_AGENTS',
+          settingsPath: 'agents',
+          label: 'Installed agents',
+          kind: 'multiselect',
+          options: [
+            { value: 'claude-code', label: 'Claude Code (CLI)' },
+            { value: 'vscode', label: 'VS Code' },
+          ],
+          default: [],
+        },
+      ],
+    };
+    const store = createSettingsStore({ agents: [] });
+
+    // Mutable "live detection" — starts with nothing installed, then flips
+    // claude-code to installed (as a post-install refresh would).
+    const installed = new Set<string>();
+    const decorateField = (field: typeof agentsCategory.fields[number]) => {
+      if (field.kind !== 'multiselect' || !field.options) return field;
+      return {
+        ...field,
+        options: field.options.map((o) =>
+          installed.has(o.value) ? { ...o, hint: 'installed' } : o,
+        ),
+      };
+    };
+
+    const { lastFrame, rerender } = render(
+      <CategoryScreen
+        category={agentsCategory}
+        store={store}
+        onBack={() => {}}
+        decorateField={decorateField}
+        refreshSignal={0}
+      />,
+    );
+    await wait(30);
+    // Nothing installed yet — no "installed" hint anywhere.
+    expect(lastFrame() ?? '').not.toContain('installed');
+
+    // Simulate an install completing: detection flips, parent bumps the signal.
+    installed.add('claude-code');
+    rerender(
+      <CategoryScreen
+        category={agentsCategory}
+        store={store}
+        onBack={() => {}}
+        decorateField={decorateField}
+        refreshSignal={1}
+      />,
+    );
+    await wait(30);
+    const frame = lastFrame() ?? '';
+    // The hint must now show WITHOUT a restart.
+    expect(frame).toContain('installed');
+    // Exactly one row (claude-code) carries it.
+    expect(frame.match(/installed/g)?.length ?? 0).toBe(1);
+  });
+
   it('hidden fields are skipped (visible: () => false)', async () => {
     const hiddenCategory: CategoryDef = {
       id: 'browser',

@@ -150,6 +150,7 @@ interface MountRootProps {
     productName?: string;
     toastStore?: ToastStore;
     activityStore?: ActivityStore;
+    agents?: ReadonlyArray<AgentTarget>;
   }>;
   _wizardSteps?: React.ComponentType<{
     store: SettingsStore;
@@ -178,6 +179,7 @@ export function MountRoot(props: MountRootProps): React.ReactElement {
     productName?: string;
     toastStore?: ToastStore;
     activityStore?: ActivityStore;
+    agents?: ReadonlyArray<AgentTarget>;
   }> | null>(() => props._inkRoot ?? null);
   const [WizardSteps, setWizardSteps] = React.useState<React.ComponentType<{
     store: SettingsStore;
@@ -240,6 +242,7 @@ export function MountRoot(props: MountRootProps): React.ReactElement {
     productName: props.productName,
     toastStore: defaultToastStore,
     activityStore: defaultActivityStore,
+    agents: props.agents,
   });
 }
 

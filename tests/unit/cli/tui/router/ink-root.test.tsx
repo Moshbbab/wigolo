@@ -79,6 +79,49 @@ describe('InkRoot — routing behaviors', () => {
     expect(lastFrame() ?? '').toMatch(/Browser/i);
   });
 
+  // Bug #105 — the persistent shell's Agents category must show live install
+  // hints from runtime detection (not schema-static options) and re-detect on
+  // entry, so a row reads "installed" without restarting the app.
+  it('agents category shows live "installed" hint from detection', async () => {
+    const store = createSettingsStore({ agents: [] });
+    const detect = vi.fn().mockResolvedValue(true);
+    const agents = [
+      {
+        id: 'claude-code' as const,
+        label: 'Claude Code',
+        configPath: '/tmp/claude-code.json',
+        serverPath: ['mcpServers', 'wigolo'],
+        envPath: ['mcpServers', 'wigolo', 'env'],
+        detect,
+        backupDir: () => '/tmp/backups',
+      },
+    ];
+    const { lastFrame } = render(
+      <InkRoot store={store} catalog={CATALOG} initialRoute="agents" agents={agents} />,
+    );
+    await wait(60);
+    // Detection ran for the agents category…
+    expect(detect).toHaveBeenCalled();
+    // …and the claude-code option row now carries the live install hint.
+    const frame = lastFrame() ?? '';
+    const claudeRow = frame.split('\n').find((l) => l.includes('Claude Code (CLI)')) ?? '';
+    expect(claudeRow).toContain('installed');
+  });
+
+  it('agents category renders without install hints when no targets supplied', async () => {
+    const store = createSettingsStore({ agents: [] });
+    const { lastFrame } = render(
+      <InkRoot store={store} catalog={CATALOG} initialRoute="agents" />,
+    );
+    await wait(40);
+    // No detection source → no fabricated hints on the option rows. (The static
+    // help/description text mentions "installed"; the regression is specifically
+    // about the checkbox-row hint, so scope the assertion to option rows.)
+    const frame = lastFrame() ?? '';
+    const optionRows = frame.split('\n').filter((l) => /\[[ x]\]/.test(l));
+    expect(optionRows.some((l) => l.includes('installed'))).toBe(false);
+  });
+
   it('mounts VerifyScreen when initialRoute is "verify"', async () => {
     const store = makeStore();
     const { lastFrame } = render(

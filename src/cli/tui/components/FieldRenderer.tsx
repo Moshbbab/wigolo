@@ -29,6 +29,26 @@ import type { FieldDef } from '../schema/types.js';
 
 const SAVED_CHECK_TTL = 1500;
 
+// Upper bound on how many masking asterisks we ever render for an in-progress
+// secret. Pasting a long API key used to emit one asterisk per character
+// (`'*'.repeat(buffer.length)`), which overflowed the field width and cascaded
+// across the whole layout (#108). Beyond this many chars we switch to a compact
+// `••••… (N chars)` summary so the rendered width stays bounded while the full
+// value remains in the buffer untouched.
+const MASKED_ECHO_MAX = 32;
+
+/**
+ * Bounded mask for the in-edit secret buffer. For short inputs we echo one
+ * asterisk per char (familiar feedback). Once the buffer exceeds MASKED_ECHO_MAX
+ * we cap the asterisk run and append a `(N chars)` counter, keeping the rendered
+ * string a fixed, line-safe width regardless of how long the pasted secret is.
+ * The plaintext never appears in the output.
+ */
+function maskedEcho(length: number): string {
+  if (length <= MASKED_ECHO_MAX) return '*'.repeat(length);
+  return `${'*'.repeat(MASKED_ECHO_MAX)}… (${length} chars)`;
+}
+
 export interface FieldRendererProps {
   field: FieldDef;
   value: unknown;
@@ -396,8 +416,9 @@ export function FieldRenderer(props: FieldRendererProps): React.ReactElement {
       return buffer;
     }
     if (editing && field.kind === 'masked') {
-      // Echo asterisks, never the typed characters.
-      return '*'.repeat(buffer.length);
+      // Echo asterisks, never the typed characters. Bounded so a long paste
+      // can't flood the line and corrupt the surrounding layout (#108).
+      return maskedEcho(buffer.length);
     }
     if (field.kind === 'masked') {
       const hasValue = typeof value === 'string' && value.length > 0;

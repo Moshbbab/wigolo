@@ -48,10 +48,32 @@ export interface CategoryScreenProps {
    * Absent in regular SettingsHome → CategoryScreen navigation.
    */
   extraRows?: ReadonlyArray<ExtraRowDef>;
+  /**
+   * Optional per-render field transform. Lets the parent inject live state the
+   * static schema can't carry — e.g. the agents multiselect's `installed`
+   * option hints derived from runtime detection. Returning the field unchanged
+   * is a no-op. Applied just before rendering each visible field.
+   */
+  decorateField?: (field: FieldDef) => FieldDef;
+  /**
+   * Bump to force `decorateField` to re-run (e.g. after an install completes so
+   * the freshly-detected install state shows without a restart — #105). The
+   * value itself is opaque; any change re-decorates.
+   */
+  refreshSignal?: number;
 }
 
 export function CategoryScreen(props: CategoryScreenProps): React.ReactElement {
-  const { category, store, onBack, onEditBufferChange, initialFocusKey, extraRows } = props;
+  const {
+    category,
+    store,
+    onBack,
+    onEditBufferChange,
+    initialFocusKey,
+    extraRows,
+    decorateField,
+    refreshSignal,
+  } = props;
 
   // Force a re-render whenever the store mutates so pending markers + the
   // ActionBar count stay in sync with edits.
@@ -66,10 +88,15 @@ export function CategoryScreen(props: CategoryScreenProps): React.ReactElement {
   const ctx: Ctx = { current, pending };
 
   const visibleFields = useMemo<ReadonlyArray<FieldDef>>(
-    () => category.fields.filter((f) => (f.visible ? f.visible(ctx) : true)),
+    () => {
+      const filtered = category.fields.filter((f) => (f.visible ? f.visible(ctx) : true));
+      return decorateField ? filtered.map((f) => decorateField(f)) : filtered;
+    },
     // ctx is rebuilt every render; recompute whenever store contents change.
+    // `refreshSignal` forces re-decoration after runtime state changes (e.g. a
+    // post-install detection refresh) even when the schema/store are unchanged.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [category, JSON.stringify(current), JSON.stringify(pending)],
+    [category, JSON.stringify(current), JSON.stringify(pending), decorateField, refreshSignal],
   );
 
   const [focusedIndex, setFocusedIndex] = useState(() => {

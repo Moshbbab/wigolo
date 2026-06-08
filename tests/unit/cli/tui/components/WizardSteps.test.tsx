@@ -231,4 +231,76 @@ describe('WizardSteps', () => {
     expect(ids).toContain('cursor');
     expect(onDone).toHaveBeenCalledTimes(1);
   });
+
+  // Bug #105 — install state was detected once and never refreshed, so the
+  // agents multiselect showed stale checkboxes/hints until restart. The wizard
+  // must re-run detection after the install loop completes.
+  it('re-detects agent install state after finishing (no stale checkbox until restart)', async () => {
+    const saveImpl = vi.fn().mockResolvedValue({ saved: [], propagated: [], failed: [] });
+    const installImpl = vi.fn().mockResolvedValue({ ok: true });
+
+    const store = makeStore();
+    store.set('agents', ['claude-code']);
+
+    // detect() starts false (not yet installed) and flips true once install
+    // has run, mirroring how a real config-file probe behaves post-write.
+    let installed = false;
+    const target: AgentTarget = {
+      id: 'claude-code',
+      label: 'claude-code',
+      configPath: '/tmp/claude-code.json',
+      serverPath: ['mcpServers', 'wigolo'],
+      envPath: ['mcpServers', 'wigolo', 'env'],
+      detect: vi.fn().mockImplementation(() => Promise.resolve(installed)),
+      backupDir: () => '/tmp/backups',
+    };
+    const installImplFlip = vi.fn().mockImplementation(() => {
+      installed = true;
+      return Promise.resolve({ ok: true });
+    });
+    void installImpl;
+
+    const { stdin } = render(
+      <WizardSteps
+        store={store}
+        catalog={CATALOG}
+        configPath="/tmp/config.json"
+        agents={[target]}
+        secretStore={makeSecretStore()}
+        onDone={() => {}}
+        onSkip={() => {}}
+        runSystemCheckImpl={silentSystemCheck}
+        saveImpl={saveImpl}
+        installAgentImpl={installImplFlip}
+      />,
+    );
+
+    // Mount-time detection ran (initial probe).
+    await wait(40);
+    const detectCallsAfterMount = (target.detect as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(detectCallsAfterMount).toBeGreaterThanOrEqual(1);
+
+    // Drive to the finish.
+    stdin.write(ENTER);            // Welcome → System
+    await wait(40);
+    await wait(60);
+    stdin.write(ENTER);            // System → LLM
+    await wait(40);
+    stdin.write('\x1b[B');         // ↓ field 1
+    await wait(25);
+    stdin.write('\x1b[B');         // ↓ Continue
+    await wait(25);
+    stdin.write(ENTER);            // → step 4
+    await wait(60);
+    stdin.write('\x1b[B');         // ↓ Finish
+    await wait(25);
+    stdin.write(ENTER);            // Finish → save + install
+    await wait(120);
+
+    // Install flipped detection true; the wizard must have probed again AFTER
+    // install (more detect() calls than at mount), proving the refresh ran.
+    expect(installImplFlip).toHaveBeenCalledTimes(1);
+    const detectCallsAfterFinish = (target.detect as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(detectCallsAfterFinish).toBeGreaterThan(detectCallsAfterMount);
+  });
 });

@@ -657,6 +657,97 @@ describe('FieldRenderer', () => {
     expect(frame).toContain('***');
   });
 
+  // Bug #108 — pasting a long API key floods asterisks across the layout. The
+  // masked editing display used `'*'.repeat(buffer.length)`, so a 200-char key
+  // rendered 200 contiguous asterisks, blowing past the field width and
+  // cascading over the rest of the UI. The fix must bound the *rendered* mask
+  // while keeping the full pasted value in the committed buffer.
+  it('masked: pasting a long key does not render an unbounded asterisk run', async () => {
+    const onChange = vi.fn();
+    const { stdin, rerender, lastFrame } = render(
+      <FieldRenderer
+        field={maskedField}
+        value=""
+        focused={true}
+        editing={false}
+        onChange={onChange}
+        onEditStart={noop}
+        onEditDone={noop}
+        onEditCancel={noop}
+      />,
+    );
+    rerender(
+      <FieldRenderer
+        field={maskedField}
+        value=""
+        focused={true}
+        editing={true}
+        onChange={onChange}
+        onEditStart={noop}
+        onEditDone={noop}
+        onEditCancel={noop}
+      />,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    // Simulate a paste: many characters arriving in quick succession. In a real
+    // terminal a paste lands as one large `input` chunk; the rendered mask must
+    // stay bounded regardless of how the buffer grew.
+    const longKey = 'sk-ant-' + 'A'.repeat(200);
+    for (const ch of longKey) stdin.write(ch);
+    await new Promise((r) => setTimeout(r, 40));
+    const frame = lastFrame() ?? '';
+    // No raw asterisk run anywhere near the pasted length — the rendered mask
+    // must be capped well under the buffer size.
+    const longestStarRun = (frame.match(/\*+/g) ?? []).reduce(
+      (max, run) => Math.max(max, run.length),
+      0,
+    );
+    expect(longestStarRun).toBeLessThanOrEqual(64);
+    // And no single rendered line approaches the pasted length (layout intact).
+    const widest = frame.split('\n').reduce((m, l) => Math.max(m, l.length), 0);
+    expect(widest).toBeLessThan(longKey.length);
+    // Committing must still store the FULL pasted key, not the truncated mask.
+    stdin.write('\r');
+    await new Promise((r) => setTimeout(r, 30));
+    expect(onChange).toHaveBeenCalledWith(longKey);
+  });
+
+  it('masked: long-key editing display shows a char-count summary', async () => {
+    const { stdin, rerender, lastFrame } = render(
+      <FieldRenderer
+        field={maskedField}
+        value=""
+        focused={true}
+        editing={false}
+        onChange={noop}
+        onEditStart={noop}
+        onEditDone={noop}
+        onEditCancel={noop}
+      />,
+    );
+    rerender(
+      <FieldRenderer
+        field={maskedField}
+        value=""
+        focused={true}
+        editing={true}
+        onChange={noop}
+        onEditStart={noop}
+        onEditDone={noop}
+        onEditCancel={noop}
+      />,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    const longKey = 'A'.repeat(120);
+    for (const ch of longKey) stdin.write(ch);
+    await new Promise((r) => setTimeout(r, 40));
+    const frame = lastFrame() ?? '';
+    // The buffer length surfaces as a compact summary so the user has feedback
+    // without flooding the line. Plaintext must never leak.
+    expect(frame).toContain('120 chars');
+    expect(frame).not.toContain(longKey);
+  });
+
   it('masked: esc cancels edit without firing onChange', async () => {
     const onChange = vi.fn();
     const onEditCancel = vi.fn();

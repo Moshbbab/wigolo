@@ -19,6 +19,11 @@ import { ImportScreen } from '../components/ImportScreen.js';
 import { DashboardUninstall } from '../components/DashboardUninstall.js';
 import { App, DEFAULT_ROUTES } from '../shell/App.js';
 import { buildPaletteIndex, type PaletteEntry } from '../shell/palette-index.js';
+import type { AgentTarget } from '../state/agent-targets.js';
+import {
+  makeInstalledHintDecorator,
+  detectInstalledAgentIds,
+} from '../state/agent-install-hints.js';
 
 type ScreenView =
   | { kind: 'home' }
@@ -93,6 +98,13 @@ export interface InkRootProps {
    * via keyboard.
    */
   initialRoute?: string;
+  /**
+   * Agent targets used to compute live `installed` hints for the agents
+   * multiselect. When omitted, the agents category renders without runtime
+   * install hints (schema-static). Detection re-runs whenever the agents
+   * category is (re)entered so the row reflects current install state (#105).
+   */
+  agents?: ReadonlyArray<AgentTarget>;
 }
 
 function resolveInitialView(initialRoute: string | undefined): ScreenView {
@@ -145,9 +157,30 @@ export function InkRoot(props: InkRootProps): React.ReactElement {
     toastStore,
     activityStore: injectedActivityStore,
     initialRoute,
+    agents,
   } = props;
 
   const liveActivityStore = injectedActivityStore ?? defaultActivityStore;
+
+  // Live install-state for the agents multiselect (#105). Detection re-runs on
+  // each entry into the agents category so the checkbox/hint reflects current
+  // install state rather than a one-shot snapshot from app start.
+  const [installedAgentIds, setInstalledAgentIds] = useState<ReadonlySet<string>>(new Set());
+  const [agentRefresh, setAgentRefresh] = useState(0);
+  const refreshInstalledAgents = useCallback(async () => {
+    if (!agents || agents.length === 0) return;
+    try {
+      const ids = await detectInstalledAgentIds(agents);
+      setInstalledAgentIds(ids);
+      setAgentRefresh((n) => n + 1);
+    } catch {
+      /* detection is cosmetic — never break the shell over it */
+    }
+  }, [agents]);
+  const decorateAgentsField = useMemo(
+    () => makeInstalledHintDecorator(installedAgentIds),
+    [installedAgentIds],
+  );
 
   const [view, setView] = useState<ScreenView>(() => resolveInitialView(initialRoute));
   const [focusedPane, setFocusedPane] = useState<'sidebar' | 'main'>('sidebar');
@@ -318,6 +351,13 @@ export function InkRoot(props: InkRootProps): React.ReactElement {
     setFocusedPane('main');
   }, [onExit]);
 
+  // Re-detect agent install state whenever the agents category becomes the
+  // active view, so re-entering the screen always shows fresh hints (#105).
+  const onAgentsCategory = view.kind === 'category' && view.id === 'agents';
+  useEffect(() => {
+    if (onAgentsCategory) void refreshInstalledAgents();
+  }, [onAgentsCategory, refreshInstalledAgents]);
+
   const activeRoute = computeActiveRoute(view);
   const routeId = computeRouteId(view);
   const paneTitle = computePaneTitle(view, catalog);
@@ -340,6 +380,7 @@ export function InkRoot(props: InkRootProps): React.ReactElement {
         />
       );
     } else {
+      const isAgents = category.id === 'agents';
       currentScreen = (
         <CategoryScreen
           category={category}
@@ -347,6 +388,9 @@ export function InkRoot(props: InkRootProps): React.ReactElement {
           onBack={goHome}
           onEditBufferChange={setInEditBuffer}
           initialFocusKey={view.initialFocusKey}
+          {...(isAgents
+            ? { decorateField: decorateAgentsField, refreshSignal: agentRefresh }
+            : {})}
         />
       );
     }

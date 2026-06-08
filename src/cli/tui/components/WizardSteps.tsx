@@ -23,6 +23,10 @@ import type { AgentTarget } from '../state/agent-targets.js';
 import { CategoryScreen } from './CategoryScreen.js';
 import { save as runSave, installAgent, type SecretStore } from '../state/propagation.js';
 import {
+  makeInstalledHintDecorator,
+  detectInstalledAgentIds,
+} from '../state/agent-install-hints.js';
+import {
   runSystemCheck,
   type SystemCheckResult,
 } from '../system-check.js';
@@ -336,6 +340,31 @@ export function WizardSteps(props: WizardStepsProps): React.ReactElement {
   const llmCategory = useMemo(() => findCategory(catalog, 'llm'), [catalog]);
   const agentsCategory = useMemo(() => findCategory(catalog, 'agents'), [catalog]);
 
+  // Live install-state for the agents multiselect. Detection is async and
+  // re-runs after an install completes so a freshly-installed agent's row shows
+  // its `installed` hint immediately, without a restart (#105). `refreshSignal`
+  // forces CategoryScreen to re-decorate even though the schema is unchanged.
+  const [installedAgentIds, setInstalledAgentIds] = useState<ReadonlySet<string>>(new Set());
+  const [agentRefresh, setAgentRefresh] = useState(0);
+
+  const refreshInstalledAgents = useCallback(async () => {
+    if (!agents || agents.length === 0) return;
+    const ids = await detectInstalledAgentIds(agents);
+    setInstalledAgentIds(ids);
+    setAgentRefresh((n) => n + 1);
+  }, [agents]);
+
+  // Detect once on mount so the wizard's agents step reflects pre-existing
+  // installs from the very first render.
+  useEffect(() => {
+    void refreshInstalledAgents();
+  }, [refreshInstalledAgents]);
+
+  const decorateAgentsField = useMemo(
+    () => makeInstalledHintDecorator(installedAgentIds),
+    [installedAgentIds],
+  );
+
   // Global Esc-from-anywhere fallback — but only when CategoryScreen isn't
   // actively owning the keyboard. Step 1/2 own their own input; steps 3/4
   // route Esc through CategoryScreen, which already calls `onBack` on Esc,
@@ -429,6 +458,14 @@ export function WizardSteps(props: WizardStepsProps): React.ReactElement {
     } finally {
       setSaving(false);
     }
+    // Re-detect install state so the agents multiselect reflects what we just
+    // installed without waiting for a restart (#105). Best-effort: a detection
+    // failure here must not derail finishing the wizard.
+    try {
+      await refreshInstalledAgents();
+    } catch {
+      /* ignore — refresh is cosmetic, finish proceeds regardless */
+    }
     // On clean success, probe component status and show the ceremony screen.
     // On error, call onDone immediately (no ceremony).
     if (!hadError) {
@@ -453,6 +490,7 @@ export function WizardSteps(props: WizardStepsProps): React.ReactElement {
     saveImpl,
     installAgentImpl,
     onDone,
+    refreshInstalledAgents,
   ]);
 
   const advanceFromCategory = useCallback(() => {
@@ -521,6 +559,8 @@ export function WizardSteps(props: WizardStepsProps): React.ReactElement {
         category={agentsCategory}
         store={store}
         onBack={onSkip}
+        decorateField={decorateAgentsField}
+        refreshSignal={agentRefresh}
         extraRows={[
           { label: 'Finish', onActivate: advanceFromCategory },
           { label: 'Quit', onActivate: onSkip, dim: true },

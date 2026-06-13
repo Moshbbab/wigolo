@@ -95,6 +95,24 @@ function longestRun(phrase: string[], doc: string[]): number {
   return best;
 }
 
+// True when a result is a rare-term MISS: the query carries rare terms but this
+// result contains none of them (no compound token present, or phrase run < 2).
+// Used to cap domain authority per-result — a high-authority page that doesn't
+// actually contain the rare terms shouldn't outrank an exact-match page. Hits
+// (e.g. a result that DOES contain the compound) keep their authority intact, so
+// a legitimate on-topic high-authority page is never penalised.
+export function isRareTermMiss(result: RareScorable, rare: RareTerms): boolean {
+  if (rare.compoundTokens.length > 0) {
+    const haystack = `${result.title} ${result.url} ${result.snippet}`.toLowerCase();
+    return !rare.compoundTokens.some((t) => haystack.includes(t));
+  }
+  if (rare.conceptPhrase && rare.conceptPhrase.length >= 2) {
+    const docTokens = tokenizeDoc(`${result.title} ${result.snippet}`);
+    return longestRun(rare.conceptPhrase, docTokens) < 2;
+  }
+  return false;
+}
+
 export function rareTermFactor(result: RareScorable, rare: RareTerms): number {
   if (rare.compoundTokens.length === 0 && !rare.conceptPhrase) return 1;
 

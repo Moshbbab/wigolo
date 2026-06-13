@@ -4,16 +4,21 @@ export interface AuthorityBoostable {
 }
 
 export interface AuthorityBoostOptions {
-  capWhenRare?: boolean;
+  /** URLs that are rare-term MISSES for the current query (contain none of the
+   * query's compound tokens, or have phrase run < 2). Generic (non-known-
+   * subject) authority for these is multiplicatively reduced so an off-topic
+   * high-authority page can't outrank an exact-match page. Per-result, not
+   * query-wide: a high-authority page that DOES contain the rare terms (a hit)
+   * keeps its full authority. */
+  capUrls?: ReadonlySet<string>;
 }
 
-// Generic (non-known-subject) authority is REDUCED by this factor when the
-// query carries rare/compound terms, so exact-token pages aren't buried by
-// topic-adjacent high-authority domains. Must be multiplicative, not a Math.min
-// ceiling: the additive boosts (down to +0.04 for an authoritative TLD) sit on
-// a tiny ~0.016 RRF base, so a clamp ceiling above 0.04 would be a no-op and an
-// off-topic .org/.io page would still win. Multiplicative reduction shrinks
-// every generic boost proportionally.
+// Generic (non-known-subject) authority is REDUCED by this factor for rare-term
+// miss results. Must be multiplicative, not a Math.min ceiling: the additive
+// boosts (down to +0.04 for an authoritative TLD) sit on a tiny ~0.016 RRF base,
+// so a clamp ceiling above 0.04 would be a no-op and an off-topic .org/.io page
+// would still win. Multiplicative reduction shrinks every generic boost
+// proportionally.
 const GENERIC_AUTHORITY_RARE_FACTOR = 0.25;
 
 const STOPWORDS = new Set([
@@ -143,7 +148,7 @@ export function applyAuthorityBoost<T extends AuthorityBoostable>(
 
     if (boost === 0 && AUTHORITATIVE_TLD.test(host)) boost += 0.04;
 
-    if (opts.capWhenRare && !fromKnownSubject) {
+    if (opts.capUrls?.has(r.url) && !fromKnownSubject) {
       boost *= GENERIC_AUTHORITY_RARE_FACTOR;
     }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { detectRareTerms, rareTermFactor } from '../../../../src/search/core/rare-terms.js';
+import { detectRareTerms, rareTermFactor, isRareTermMiss } from '../../../../src/search/core/rare-terms.js';
 
 describe('detectRareTerms', () => {
   it('detects hyphenated, digit-suffix, and snake_case compound tokens', () => {
@@ -58,5 +58,25 @@ describe('rareTermFactor', () => {
 
   it('returns 1.0 for plain queries with no rare terms', () => {
     expect(rareTermFactor({ title: 'x', url: 'https://x.com', snippet: 'y' }, detectRareTerms('best laptop'))).toBe(1);
+  });
+});
+
+describe('isRareTermMiss', () => {
+  const compound = detectRareTerms('sqlite-vec vec0 knn');
+  const phrase = detectRareTerms('reciprocal rank fusion explained');
+
+  it('is a miss when the query has compounds but the doc contains none', () => {
+    expect(isRareTermMiss({ title: 'SQLite Home', url: 'https://sqlite.org', snippet: 'database' }, compound)).toBe(true);
+    expect(isRareTermMiss({ title: 'sqlite-vec docs', url: 'https://x.io/sqlite-vec', snippet: 'vec0' }, compound)).toBe(false);
+  });
+
+  it('is a miss when a concept-phrase query result has phrase run < 2', () => {
+    expect(isRareTermMiss({ title: 'Reciprocal (math)', url: 'https://w.org', snippet: 'the reciprocal of x' }, phrase)).toBe(true);
+    expect(isRareTermMiss({ title: 'Reciprocal Rank Fusion', url: 'https://e.com', snippet: 'how RRF works' }, phrase)).toBe(false);
+  });
+
+  it('is never a miss for a single-token query with no rare terms', () => {
+    // one token => no compound and no concept phrase => nothing to miss
+    expect(isRareTermMiss({ title: 'x', url: 'https://x.com', snippet: 'y' }, detectRareTerms('laptop'))).toBe(false);
   });
 });

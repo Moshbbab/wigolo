@@ -107,4 +107,36 @@ describe('isolateContentRoot', () => {
     expect(out).not.toMatch(/Learn.*Reference.*Community.*Blog/s);
     expect(out).toMatch(/reference|component|hook/i);
   });
+
+  it('body that is all chrome around an empty <main> → unchanged (absolute guard)', () => {
+    const html = body(
+      `<header><nav><a href="/a">A</a></nav></header>` +
+      `<main></main>` +
+      `<footer>${fill(80)}</footer>`,
+    );
+    // <main> exists (clears the regex pre-check + parse) but has no text → below
+    // MIN_ROOT_TEXT, so isolation stays inert.
+    expect(isolateContentRoot(html)).toBe(html);
+  });
+
+  it('no content-root tag → returns input without parsing (fast path)', () => {
+    const html = body(`<section><p>${fill(80)}</p></section>`);
+    // Identity return: the regex pre-check rejects before parse, so byte-stable.
+    expect(isolateContentRoot(html)).toBe(html);
+  });
+
+  it('nested chrome is not double-counted in the ratio denominator', () => {
+    // A legit <main> just above 40% of chrome-excluded body. The footer wraps a
+    // nested <nav>; if that nested nav text were subtracted twice the denominator
+    // would shrink, wrongly inflating the ratio. Assert narrowing fires correctly.
+    const html = body(
+      `<header><nav>${fill(30)}</nav></header>` +
+      `<main><p>${fill(100)}</p></main>` +
+      `<footer>${fill(20)}<nav>${fill(60)}</nav></footer>`,
+    );
+    const out = isolateContentRoot(html);
+    expect(out).toContain('<main>');
+    expect(out).not.toMatch(/<footer>/);
+    expect(out).not.toMatch(/<header>/);
+  });
 });

@@ -60,7 +60,13 @@ function pruneToRoot(body: Element, root: Element): void {
   }
 }
 
+// Cheap reject for the common no-semantic-root page (article/blog/news with a
+// plain <body>): skip the full parse entirely when no content-root tag exists.
+// Tolerates attributes (`<main id=...`) via the `[\s>]` / `role` forms.
+const HAS_CONTENT_ROOT = /<main[\s>]|role=["']?main|<article[\s>]/i;
+
 export function isolateContentRoot(html: string): string {
+  if (!HAS_CONTENT_ROOT.test(html)) return html;
   try {
     const { document } = parseHTML(html);
     const body = document.querySelector('body');

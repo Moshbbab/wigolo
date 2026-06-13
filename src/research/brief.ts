@@ -204,6 +204,12 @@ const COMPARISON_TERMS = ['faster', 'slower', 'better', 'worse', 'more', 'less',
   'easier', 'harder', 'simpler', 'complex', 'lightweight', 'heavy',
   'performance', 'scalability', 'ecosystem', 'community', 'support'];
 
+// Pre-compile the word-boundary matchers once. buildComparisonSection scans
+// every sentence of every source against every term, so compiling these in the
+// inner loop meant ~8500 RegExp constructions per call.
+const COMPARISON_TERM_MATCHERS: Array<{ term: string; re: RegExp }> =
+  COMPARISON_TERMS.map((term) => ({ term, re: new RegExp(`\\b${term}\\b`) }));
+
 const MAX_TRADEOFFS = 8;
 const MAX_TRADEOFF_LEN = 280;
 
@@ -234,7 +240,9 @@ function buildComparisonSection(
       // The comparison term must appear in the same sentence as an entity —
       // that co-location is what makes the keyword a directional signal we can
       // honestly quote.
-      const matchedTerms = COMPARISON_TERMS.filter((t) => wordBoundaryIncludes(sentenceLower, t));
+      const matchedTerms = COMPARISON_TERM_MATCHERS
+        .filter((m) => m.re.test(sentenceLower))
+        .map((m) => m.term);
       if (matchedTerms.length === 0) continue;
 
       for (const t of matchedTerms) comparisonPoints.add(t);
@@ -268,13 +276,6 @@ function splitSentences(text: string): string[] {
     .split(/(?<=[.!?])\s+/)
     .map((s) => s.trim())
     .filter((s) => s.length >= 20);
-}
-
-// Match a comparison term only on word boundaries so "more" doesn't fire on
-// "moreover" and "less" doesn't fire on "lessons".
-function wordBoundaryIncludes(haystackLower: string, term: string): boolean {
-  const re = new RegExp(`\\b${term}\\b`);
-  return re.test(haystackLower);
 }
 
 function firstSubstantiveParagraph(markdown: string): string | null {

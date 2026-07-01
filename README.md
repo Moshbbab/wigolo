@@ -76,16 +76,17 @@ It's **not** a hosted SaaS, a vector database other apps query, or a general web
 
 ## Benchmark
 
-A real head-to-head from one AI-agent session: the same query — `postgres 18 async IO real-world benchmark` — sent once to four web tools (built-in **WebSearch**, **wigolo**, **Tavily**, and **Firecrawl**). wigolo matched the paid tools on the #1 result (`postgresqlhtx.com`), returned the most scored evidence — with real benchmark excerpts — and served the **re-query from cache in 3 ms, at $0**.
+One query, run live inside a single AI-agent session and fanned out to four web tools at once — built-in **WebSearch**, **wigolo**, **Tavily**, and **Firecrawl** — then scored by the agent itself. The prompt: `postgres 18 async IO real-world benchmark`.
 
-It's one honest query, not a leaderboard: wigolo's only miss was the long tail — a touch more docs/homepage noise than the hosted neural indexes. See it and judge for yourself:
+wigolo held its own against the paid tools. It surfaced the **same #1 source** as WebSearch (`postgresqlhtx.com`), returned as many results as Firecrawl, and was the only tool to hand back **real benchmark excerpts with an explainable per-result score** — pulling the concrete figure the others left on the table (`15,071ms → 5,723ms` on `io_uring`). Then it re-served the entire query **from local cache in ~3 ms, for $0** — no API key, nothing leaving the machine.
 
-<details>
-<summary><b>See the run →</b></summary>
+One honest query, not a leaderboard — and the weak spot shows too: a little more docs/homepage noise in the long tail than the hosted neural indexes carry. Here's the full run:
+
+<div align="center">
 
 <img alt="wigolo vs built-in WebSearch, Tavily, and Firecrawl on one real query" src="assets/wigolo-vs.gif" width="900">
 
-</details>
+</div>
 
 ## Architecture
 

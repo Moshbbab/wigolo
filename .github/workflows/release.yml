@@ -49,9 +49,10 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      # Public beta: flag every GitHub Release as a pre-release.
-      # Remove --prerelease when cutting the first stable release.
+      # Publish as a normal GitHub Release so the newest version earns the Latest
+      # badge and shows in the repo sidebar. The -beta.N version string is what
+      # marks it as a beta; GitHub's "Pre-release" flag is intentionally not set.
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes --prerelease
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes

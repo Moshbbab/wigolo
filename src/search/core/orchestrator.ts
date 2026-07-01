@@ -147,7 +147,7 @@ function matchesDomain(host: string, domain: string): boolean {
 // `foo.com`). exclude_domains is the symmetric hard drop. Earlier versions
 // applied a soft floor that demoted off-domain results when matches were
 // below 3; that leaked off-domain URLs into responses. Hard enforcement
-// matches Tavily semantics and what wigolo advertises.
+// matches what wigolo advertises.
 function applyDomainFilters(
   results: RawSearchResult[],
   includeDomains?: string[],

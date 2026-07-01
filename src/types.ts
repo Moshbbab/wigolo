@@ -62,7 +62,7 @@ export interface FetchInput {
 export type FetchMethod = 'cache' | 'http' | 'tls-impersonation' | 'playwright';
 
 export interface FetchOutput {
-  /** Tavily-canonical alias of how long the request took, ms. */
+  /** Compatibility alias of how long the request took, ms. */
   response_time_ms?: number;
   url: string;
   title: string;
@@ -455,7 +455,7 @@ export interface SearchOutput {
    * returned nothing or got fully de-duped out. */
   engines_used: string[];
   total_time_ms: number;
-  /** Tavily-canonical alias of total_time_ms. Always emitted. */
+  /** Compatibility alias of total_time_ms. Always emitted. */
   response_time_ms?: number;
   search_time_ms?: number;
   fetch_time_ms?: number;
@@ -838,7 +838,7 @@ export interface LinkEdge {
 }
 
 export interface CrawlOutput {
-  /** Tavily-canonical alias of how long the request took, ms. */
+  /** Compatibility alias of how long the request took, ms. */
   response_time_ms?: number;
   pages: CrawlResultItem[];
   total_found: number;
@@ -980,7 +980,7 @@ export interface ExtractOutput {
   mode: 'selector' | 'tables' | 'metadata' | 'schema' | 'structured' | 'brand';
   error?: string;
   warnings?: string[];
-  /** Tavily-canonical alias of how long the request took, ms. */
+  /** Compatibility alias of how long the request took, ms. */
   response_time_ms?: number;
   /** Optional advisory message about a mode's current support level. */
   notice?: string;

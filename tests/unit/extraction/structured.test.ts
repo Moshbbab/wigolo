@@ -310,19 +310,50 @@ describe('detectDivGridTables', () => {
     expect(detectDivGridTables(serp)).toEqual([]);
   });
 
-  it('fires on a name+feature-list card grid even without an explicit price', () => {
-    // Comparison cards that name a plan and list features (no price element)
-    // are still a real grid — the name+feature-list shape qualifies.
-    const featureGrid = `
-      <div class="tiers">
-        <div class="plan"><h3>Basic</h3><ul><li>Feature A</li><li>Feature B</li></ul></div>
-        <div class="plan"><h3>Team</h3><ul><li>Feature A</li><li>Feature C</li></ul></div>
-        <div class="plan"><h3>Business</h3><ul><li>Feature A</li><li>Feature D</li></ul></div>
+  it('fires on a numeric spec/comparison card grid without an explicit price', () => {
+    // Comparison cards that name a model and list numeric specs (>=2 cells
+    // bearing digits/currency) are a real DATA grid — heading + numeric cells
+    // qualifies even with no [class*=price] element.
+    const specGrid = `
+      <div class="specs">
+        <div class="card"><h3>Model A</h3><ul><li>16 GB RAM</li><li>512 GB SSD</li></ul></div>
+        <div class="card"><h3>Model B</h3><ul><li>32 GB RAM</li><li>1024 GB SSD</li></ul></div>
+        <div class="card"><h3>Model C</h3><ul><li>64 GB RAM</li><li>2048 GB SSD</li></ul></div>
       </div>
     `;
-    const tables = detectDivGridTables(featureGrid);
+    const tables = detectDivGridTables(specGrid);
     expect(tables).toHaveLength(1);
     expect(tables[0].rows).toHaveLength(3);
-    expect(tables[0].rows[0].name).toBe('Basic');
+    expect(tables[0].rows[0].name).toBe('Model A');
+  });
+
+  it('does NOT fire on footer link columns (heading + list, but chrome + no data)', () => {
+    // The primary over-detection: footer navigation columns are heading + <li>
+    // link lists with zero numeric/currency cells, inside a <footer> landmark.
+    // They must yield ZERO grid tables — both the chrome-landmark guard and
+    // the data-ness requirement reject them.
+    const footer = `
+      <footer>
+        <div class="link-cols">
+          <div class="col"><h3>Product</h3><ul><li>Pricing</li><li>Docs</li><li>API</li></ul></div>
+          <div class="col"><h3>Company</h3><ul><li>About</li><li>Blog</li><li>Careers</li></ul></div>
+          <div class="col"><h3>Resources</h3><ul><li>Guides</li><li>Support</li><li>Status</li></ul></div>
+        </div>
+      </footer>
+    `;
+    expect(detectDivGridTables(footer)).toEqual([]);
+  });
+
+  it('does NOT fire on a blog-post grid (heading + prose, no data cells)', () => {
+    // Repeated <article> cards with a heading and non-numeric text are content,
+    // not a data grid — zero numeric/currency cells ⇒ ZERO tables.
+    const blog = `
+      <div class="posts">
+        <article class="post"><h2>First Post</h2><ul><li>tag: javascript</li></ul></article>
+        <article class="post"><h2>Second Post</h2><ul><li>tag: typescript</li></ul></article>
+        <article class="post"><h2>Third Post</h2><ul><li>tag: golang</li></ul></article>
+      </div>
+    `;
+    expect(detectDivGridTables(blog)).toEqual([]);
   });
 });

@@ -59,25 +59,54 @@ function childShape(el: Element): string {
     .join(',');
 }
 
-// A "card" must carry internal structure, not be a bare leaf. A plain
-// <li>Lightweight</li> feature-list item has no element children and no
-// heading, so it is NOT a card — this is what keeps a product page's
-// <ul class="features"> from being mistaken for a pricing grid.
+// Landmark ancestors whose repeated children are page chrome (link columns,
+// nav menus, banners) — never data grids.
+const CHROME_LANDMARKS = new Set(['nav', 'footer', 'header']);
+
+// A number- or currency-bearing cell — the data signal that separates a
+// pricing/spec/comparison grid from repeated chrome. Digits, or a currency
+// symbol, count. (A bare "Docs" / "About" nav label has neither.)
+const DATA_CELL_RE = /\d|[$€£¥₹]/;
+
+// True when the element sits inside a <nav>/<footer>/<header> landmark.
+function inChromeLandmark(el: Element): boolean {
+  let cur: Element | null = el.parentElement;
+  while (cur) {
+    if (CHROME_LANDMARKS.has(tag(cur))) return true;
+    cur = cur.parentElement;
+  }
+  return false;
+}
+
+// Count a card's feature-list items (<li>) whose text carries a number or
+// currency symbol — the data-ness signal. Scoped to <li> deliberately:
+// counting arbitrary prose children (<p>/<time>) let a comment thread with
+// dates and incidental numbers ("15 seconds", "top 10") masquerade as a spec
+// grid. A real pricing/spec/comparison card lists its data in <li> items.
+function numericCellCount(el: Element): number {
+  let n = 0;
+  for (const li of el.querySelectorAll('li')) {
+    if (DATA_CELL_RE.test(li.textContent ?? '')) n++;
+  }
+  return n;
+}
+
+// A "card" must carry a genuine DATA signal, not just a heading + list.
+// heading+list alone matched footer link columns, blog/team/FAQ grids — page
+// chrome, not tabular data. A card qualifies only when it (a) carries a
+// [class*=price] element, or (b) has >=2 numeric/currency-bearing cells
+// (a spec / comparison / pricing grid). Cards under a <nav>/<footer>/<header>
+// landmark are chrome and never qualify.
 function hasCardShape(el: Element): boolean {
   // A table row/cell is not a card — those are extractTables' job.
   if (TABLE_TAGS.has(tag(el))) return false;
   if (el.children.length === 0) return false;
-  // A pricing/comparison card is either (a) priced — carries a [class*=price]
-  // element — or (b) a named feature card: a heading (the tier/plan name) AND
-  // a feature list (<li>s). Requiring one of those two concrete shapes is the
-  // discriminator that keeps ordinary repeated page content — SERP result
-  // blocks, doc sections, comment threads, nav lists — from being emitted as
-  // phantom tables. A bare heading or heading-plus-prose is NOT a card.
+  if (inChromeLandmark(el)) return false;
+
   const hasPriceish = el.querySelector(`[class*="${PRICE_CLASS}"]`) !== null;
   if (hasPriceish) return true;
-  const hasHeading = el.querySelector('h1, h2, h3, h4, h5, h6') !== null;
-  const hasFeatureList = el.querySelector('li') !== null;
-  return hasHeading && hasFeatureList;
+
+  return numericCellCount(el) >= 2;
 }
 
 // Do two elements look like siblings from the same repeated group? Same tag,
@@ -192,7 +221,13 @@ export function detectDivGridTables(html: string): TableData[] {
 export function detectDivGridTablesFromDoc(doc: Document): TableData[] {
   const filtered = findGridGroups(doc);
   if (filtered.length === 0) return [];
-  return filtered.map(buildTable);
+  // Emit only grids with at least one derivable column (name / price /
+  // feature_*). A table whose every column is the `text` fallback carried no
+  // structure worth surfacing and is dropped — defense in depth against
+  // repeated prose blocks slipping past the card-shape gate.
+  return filtered
+    .map(buildTable)
+    .filter((t) => t.headers.some((h) => h !== 'text'));
 }
 
 function findGridGroups(doc: Document): CandidateGroup[] {

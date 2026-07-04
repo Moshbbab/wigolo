@@ -18,7 +18,8 @@ import {
   extractNamedSchema,
   NAMED_SCHEMAS,
 } from '../extraction/v1/schemas/index.js';
-import { isLocalLlmEnabled, extractWithLocalLlm } from '../extraction/v1/local-llm.js';
+import { extractWithLocalLlm } from '../extraction/v1/local-llm.js';
+import { resolveLocalModelTier } from '../integrations/cloud/llm/local-tier.js';
 import { extractBrandAsync } from '../extraction/brand.js';
 import { applyEvidenceFilter, getSourceText } from '../extraction/schema-truth.js';
 
@@ -288,12 +289,17 @@ export async function handleExtract(
       );
     }
 
-    if (mode === 'schema' && input.schema && isLocalLlmEnabled()) {
+    const localTier =
+      mode === 'schema' && input.schema ? await resolveLocalModelTier() : null;
+    if (mode === 'schema' && input.schema && localTier) {
       // Structure-first: run the deterministic passes (JSON-LD / microdata /
-      // structure fuzzy-match / DOM heuristic) BEFORE the local model, so
-      // Ollama only fills genuine gaps and structured data is never
-      // overwritten by a model guess. Structure-sourced fields are trusted;
-      // only model-filled fields go through the evidence-only filter.
+      // structure fuzzy-match / DOM heuristic) BEFORE the local model, so the
+      // model only fills genuine gaps and structured data is never overwritten
+      // by a model guess. Structure-sourced fields are trusted; only
+      // model-filled fields go through the evidence-only filter. When the tier
+      // is null (flag off — the default — or server down) this whole block is
+      // skipped and control flows to the deterministic schema path below,
+      // byte-for-byte identical to the keyless behavior.
       const det = extractWithSchemaDetailed(html, input.schema);
       const structuredValues: Record<string, unknown> = { ...det.values };
       const missing = Object.keys(input.schema.properties ?? {}).filter(
@@ -306,6 +312,7 @@ export async function handleExtract(
           schema: input.schema as unknown as Record<string, unknown>,
           html,
           url: sourceUrl ?? input.url ?? '',
+          tier: localTier,
         });
         const raw = (llmData ?? {}) as Record<string, unknown>;
         // evidence-only constraint applies to the local-llm path: an LLM can
@@ -317,6 +324,12 @@ export async function handleExtract(
           (k) => raw[k] !== undefined && raw[k] !== null && raw[k] !== '',
         );
         if (modelFilled.length > 0) {
+          // Note: applyEvidenceFilter verifies string/number/boolean fields
+          // against source but accepts array/object fields by default (see
+          // schema-truth.ts). Model-filled nested array/object fields are thus
+          // grounded by the prompt (verbatim-facts instruction over the
+          // deterministic pre-extraction), not structurally verified here.
+          // Array-level evidence verification is out of scope this round.
           const filtered = applyEvidenceFilter({
             values: raw,
             provenance: {},

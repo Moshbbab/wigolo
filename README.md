@@ -10,8 +10,9 @@ Local-first web intelligence over MCP — **no keys, no cloud, no metered bill.*
 [![node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![MCP](https://img.shields.io/badge/MCP-server-7c3aed)](https://modelcontextprotocol.io)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-2563eb)](#license)
+[![status](https://img.shields.io/badge/status-public%20beta-b7791f)](#beta--feedback)
 
-[Quickstart](#quickstart) · [Tools](#the-tools) · [Why wigolo](#why-its-different) · [Benchmark](#benchmark) · [Architecture](#architecture) · [Configuration](#configuration) · [FAQ](#faq) · [Contribute](#contributing)
+[Quickstart](#quickstart) · [Tools](#the-tools) · [Why wigolo](#why-its-different) · [Benchmark](#benchmark) · [Architecture](#architecture) · [Configuration](#configuration) · [Feedback](#beta--feedback) · [FAQ](#faq) · [Contribute](#contributing)
 
 </div>
 
@@ -389,6 +390,16 @@ Keys can also live in the OS keychain or an AES-encrypted file (`wigolo init` / 
 | `include_full_markdown` | fetch, crawl, research, agent | `false` → evidence excerpts instead of full bodies. |
 
 </details>
+
+## Beta & feedback
+
+wigolo is in **public beta**. Everything documented here works and is held to a 6,000-test suite — beta is about the polish bar, not stability. It stays beta until enough people have used it, kicked it, and starred it that calling it v1 means something.
+
+That makes your feedback the whole game right now. Every report is read, usually the same day:
+
+- 🐛 **[Report a bug](https://github.com/KnockOutEZ/wigolo/issues/new?template=bug_report.yml)** — broke, misbehaved, surprised you
+- 💡 **[Request a feature](https://github.com/KnockOutEZ/wigolo/issues/new?template=feature_request.yml)** — something it should do
+- 💬 **[Ask anything](https://github.com/KnockOutEZ/wigolo/discussions)** — questions, setups, show & tell
 
 ## FAQ
 

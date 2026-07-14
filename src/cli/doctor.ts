@@ -7,6 +7,7 @@ import { resolvePythonExe } from '../python-env.js';
 import { probeBrowser } from '../fetch/browser-probe.js';
 import { getBootstrapState, type BootstrapState } from '../searxng/bootstrap.js';
 import { isProcessAlive } from '../searxng/process.js';
+import { resolveContainerCli } from '../searxng/docker.js';
 import { getConfig } from '../config.js';
 import { getRerankProvider } from '../providers/rerank-provider.js';
 import { getEmbedProvider } from '../providers/embed-provider.js';
@@ -68,10 +69,14 @@ function checkPython(): { ok: boolean; version?: string } {
   return { ok: true, version: match?.[1] };
 }
 
-function checkDocker(): { ok: boolean; version?: string } {
-  const r = spawnSync('docker', ['--version'], { encoding: 'utf-8' });
+function checkDocker(): { ok: boolean; version?: string; cli?: string } {
+  // Any docker-compatible CLI works — see resolveContainerCli() in
+  // searxng/docker.ts (Docker Desktop, plain Docker Engine, or Podman).
+  const cli = resolveContainerCli();
+  if (!cli) return { ok: false };
+  const r = spawnSync(cli, ['--version'], { encoding: 'utf-8' });
   if (r.status !== 0 || r.error) return { ok: false };
-  return { ok: true, version: (r.stdout || '').trim() };
+  return { ok: true, version: (r.stdout || '').trim(), cli };
 }
 
 async function checkPlaywright(): Promise<{ installed: boolean; version?: string; browsers: { chromium: boolean; chromiumHeadlessShell: boolean; firefox: boolean; webkit: boolean }; chromiumPath?: string; chromiumOnDisk: boolean; chromiumError?: string }> {
@@ -403,7 +408,7 @@ async function runDoctorInner(dataDir: string, opts?: DoctorOptions): Promise<nu
   const dk = checkDocker();
   out('[wigolo doctor] Runtime:');
   out(`  Python 3:      ${py.ok ? `available (${py.version ?? 'unknown'})` : 'not available'}`);
-  out(`  Docker:        ${dk.ok ? `available (${dk.version})` : 'not available'}`);
+  out(`  Docker:        ${dk.ok ? `available (${dk.cli}, ${dk.version})` : 'not available'}`);
   if (!py.ok && !dk.ok) degraded = true;
 
   out('');

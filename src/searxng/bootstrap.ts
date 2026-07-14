@@ -1,4 +1,4 @@
-import { execSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -6,6 +6,7 @@ import { getConfig } from '../config.js';
 import { createLogger } from '../logger.js';
 import { isProcessAlive } from './process.js';
 import { resolvePythonExe, venvBinPath, checkVenvModule, isMissingVenvModuleError, venvInstallHint } from '../python-env.js';
+import { resolveContainerCli } from './docker.js';
 
 const log = createLogger('searxng');
 
@@ -124,12 +125,21 @@ export function checkPythonAvailable(): boolean {
 }
 
 export function checkDockerAvailable(): boolean {
-  try {
-    execSync('docker --version', { stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
-  }
+  // Any docker-compatible CLI works here — see resolveContainerCli() in
+  // docker.ts for the full list (Docker Desktop, plain Docker Engine, Podman).
+  return resolveContainerCli() !== null;
+}
+
+/**
+ * SearXNG does not support running natively on Windows — upstream stdlib
+ * imports (e.g. `searx/valkeydb.py`'s unconditional `import pwd`) assume a
+ * POSIX host and crash on start regardless of the Python/venv setup being
+ * otherwise correct. Upstream's guidance is to use the Docker image on
+ * unsupported OSes (github.com/searxng/searxng/discussions/4029), so native
+ * bootstrap should never be attempted on win32.
+ */
+export function isNativeSearxngSupported(platform: string = process.platform): boolean {
+  return platform !== 'win32';
 }
 
 export function getBootstrapState(dataDir: string): BootstrapState | null {
@@ -217,7 +227,7 @@ export async function resolveSearchBackend(): Promise<BackendResolution> {
     const retryWindowOpen = new Date() >= nextRetryAt;
     const budgetRemaining = attempts < config.bootstrapMaxAttempts;
 
-    if (retryWindowOpen && budgetRemaining && checkPythonAvailable()) {
+    if (retryWindowOpen && budgetRemaining && isNativeSearxngSupported() && checkPythonAvailable()) {
       log.info('SearXNG bootstrap retry window reached', { attempts, nextRetryAt: state.nextRetryAt });
       return { type: 'native', searxngPath: join(dataDir, 'searxng') };
     }
@@ -241,6 +251,27 @@ export async function resolveSearchBackend(): Promise<BackendResolution> {
     return { type: 'scraping' };
   }
 
+  if (!isNativeSearxngSupported()) {
+    log.warn('native SearXNG is not supported on Windows (upstream is POSIX-only); use a container instead');
+    const dockerCliAvailable = checkDockerAvailable();
+    if (dockerCliAvailable && config.searxngMode !== 'native') {
+      return { type: 'docker' };
+    }
+    setBootstrapState(dataDir, {
+      status: 'no_runtime',
+      error: dockerCliAvailable
+        // CLI is present but SEARXNG_MODE=native is pinning us away from it —
+        // the installation guidance below would be misleading here.
+        ? 'SearXNG has no native Windows support (upstream is POSIX-only). A docker-compatible CLI ' +
+          'was found on PATH, but SEARXNG_MODE=native is set — set SEARXNG_MODE=docker to use it, ' +
+          'or unset WIGOLO_SEARCH to use the default core backend'
+        : 'SearXNG has no native Windows support (upstream is POSIX-only) and no docker-compatible ' +
+          'CLI was found on PATH — install Docker Desktop, Podman, or any other CLI that provides a ' +
+          '`docker`/`podman` command, or unset searxng to use the default core backend',
+    });
+    return { type: 'scraping' };
+  }
+
   if (checkPythonAvailable()) {
     return { type: 'native', searxngPath: join(dataDir, 'searxng') };
   }
@@ -249,12 +280,24 @@ export async function resolveSearchBackend(): Promise<BackendResolution> {
     return { type: 'docker' };
   }
 
-  log.warn('neither Python nor Docker found — falling back to direct scraping');
-  setBootstrapState(dataDir, { status: 'no_runtime', error: 'Python 3 and Docker not found' });
+  log.warn('neither Python nor a docker-compatible CLI found — falling back to direct scraping');
+  setBootstrapState(dataDir, { status: 'no_runtime', error: 'Python 3 and a docker-compatible CLI (docker/podman) were not found' });
   return { type: 'scraping' };
 }
 
 export async function bootstrapNativeSearxng(dataDir: string): Promise<void> {
+  if (!isNativeSearxngSupported()) {
+    throw new Error(
+      'SearXNG has no native Windows support (upstream unconditionally imports POSIX-only ' +
+      'stdlib modules, e.g. `import pwd` in searx/valkeydb.py, which does not exist on Windows). ' +
+      'Install a docker-compatible container runtime and re-run — wigolo will run SearXNG in a ' +
+      'container instead. Docker Desktop is not required: a plain Docker Engine, Podman (native ' +
+      '`podman` binary or its `podman-docker` compatibility shim), or any other CLI providing a ' +
+      '`docker`/`podman` command on PATH all work. ' +
+      'See https://github.com/searxng/searxng/discussions/4029.',
+    );
+  }
+
   const release = acquireBootstrapLock(dataDir);
   const priorAttempts = getBootstrapState(dataDir)?.attempts ?? 0;
   // Captured from the proactive venv probe so the catch handler can build the
@@ -291,7 +334,11 @@ export async function bootstrapNativeSearxng(dataDir: string): Promise<void> {
     runStep(pythonExe, ['-m', 'venv', join(searxngDir, 'venv')], { timeout: 60_000 });
 
     const pip = venvBinPath(dataDir, 'pip');
-    runStep(pip, ['install', '--upgrade', 'pip', 'setuptools', 'wheel'], { timeout: 60_000 });
+    const venvPython = venvBinPath(dataDir, 'python');
+    // Windows refuses to let pip.exe overwrite itself while running (the
+    // executable file is locked), so pip's own upgrade path must go through
+    // `python -m pip` rather than invoking pip.exe directly.
+    runStep(venvPython, ['-m', 'pip', 'install', '--upgrade', 'pip', 'setuptools', 'wheel'], { timeout: 60_000 });
 
     const repoDir = join(searxngDir, 'repo');
     mkdirSync(repoDir, { recursive: true });

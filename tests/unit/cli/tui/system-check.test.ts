@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('node:child_process', () => ({
   spawnSync: vi.fn(),
+  execSync: vi.fn(),
 }));
 
 vi.mock('node:fs', async () => {
@@ -12,7 +13,7 @@ vi.mock('node:fs', async () => {
   };
 });
 
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execSync } from 'node:child_process';
 import { statfs } from 'node:fs';
 import {
   checkNode,
@@ -21,6 +22,12 @@ import {
   checkDiskSpace,
   runSystemCheck,
 } from '../../../../src/cli/tui/system-check.js';
+import { __resetResolvedContainerCli } from '../../../../src/searxng/docker.js';
+
+beforeEach(() => {
+  __resetResolvedContainerCli();
+  vi.mocked(execSync).mockReturnValue(Buffer.from('Docker version 29.4.0, build abcdef'));
+});
 
 function mockSpawn(stdout: string, status = 0): void {
   vi.mocked(spawnSync).mockReturnValue({
@@ -133,7 +140,11 @@ describe('checkPython', () => {
 });
 
 describe('checkDocker', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetResolvedContainerCli();
+    vi.mocked(execSync).mockReturnValue(Buffer.from('Docker version 29.4.0, build abcdef'));
+  });
 
   it('detects docker when available', () => {
     mockSpawn('Docker version 29.4.0, build abcdef\n');

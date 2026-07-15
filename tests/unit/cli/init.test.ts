@@ -305,6 +305,51 @@ describe('runInit', () => {
     }
   });
 
+  describe('--json (machine-readable summary)', () => {
+    it('emits a single JSON object on stdout that parses; human report goes to stderr', async () => {
+      primeHappyPath();
+      const cap = capture();
+      try {
+        const code = await runInit(['--non-interactive', '--agents=cursor', '--skip-verify', '--json']);
+        expect(code).toBe(0);
+        // The ENTIRE stdout must parse as JSON — no banner / report lines mixed in.
+        const parsed = JSON.parse(cap.stdout.join('').trim());
+        expect(parsed.status).toBe('ok');
+        expect(parsed.path).toBe('plain');
+        expect(parsed.warmup).toBe(false);
+        expect(Array.isArray(parsed.agentsRegistered)).toBe(true);
+        expect(parsed.agentsRegistered).toEqual(['cursor']);
+        expect(parsed.configPersisted).toBe(true);
+        // Human report (banner) must NOT pollute stdout under --json.
+        expect(cap.stdout.join('')).not.toContain('BANNER');
+        expect(cap.stderr.join('')).toContain('BANNER');
+      } finally {
+        cap.restore();
+      }
+    });
+
+    it('reports status=error and exit 1 when a required component failed', async () => {
+      primeHappyPath();
+      summarizeSetupMock.mockReturnValue({
+        lines: ['Setup: 5/6 ready'],
+        readyCount: 5,
+        total: 6,
+        requiredFailed: true,
+        exitCode: 1,
+      });
+      const cap = capture();
+      try {
+        const code = await runInit(['--non-interactive', '--agents=cursor', '--skip-verify', '--json']);
+        expect(code).toBe(1);
+        const parsed = JSON.parse(cap.stdout.join('').trim());
+        expect(parsed.status).toBe('error');
+        expect(parsed.requiredFailed).toBe(true);
+      } finally {
+        cap.restore();
+      }
+    });
+  });
+
   describe('default TTY path is plain (NOT Ink)', () => {
     let prevTTY: boolean | undefined;
     let prevCI: string | undefined;

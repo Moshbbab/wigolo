@@ -35,12 +35,10 @@ RUN npm ci --omit=dev
 # JS-render fetch downloads only the browser binary into the /data volume and
 # launches cleanly.
 #
-# `sudo` is present so the first-use deps-strategy probe (`sudo -n true`) resolves
-# to a graceful non-zero (no passwordless config) instead of a spawn ENOENT; the
-# baked libraries make the deps step a no-op skip either way.
-# `python3` is present so `doctor` reports a healthy runtime (it is the runtime
-# the optional search-engine sidecar uses if a user opts into it inside the
-# container); without it, doctor flags the runtime as unavailable.
+# No sudo in the image: the first-use deps-strategy probe treats its absence as
+# the 'skip' strategy (the baked libraries make the deps step unnecessary anyway).
+# No python either — it is only needed by the opt-in search-engine sidecar, and
+# doctor's runtime check is scoped to that backend.
 # Start from a CLEAN slim base (not `FROM deps`) so node_modules lands in the
 # image exactly once, via a single --chown COPY. `FROM deps` + a second COPY +
 # `chown -R /app` would triplicate the ~750MB node_modules layer.
@@ -54,13 +52,11 @@ WORKDIR /app
 COPY --chown=node:node --from=deps /app/node_modules ./node_modules
 COPY --chown=node:node --from=builder /app/dist ./dist
 COPY --chown=node:node package.json ./
-# Install sudo + python3, then the browser engine's OS libraries via the LOCAL
-# playwright CLI (already in node_modules) so the version matches the runtime and
-# no throwaway playwright is downloaded.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends sudo python3 \
-    && rm -rf /var/lib/apt/lists/* \
-    && ./node_modules/.bin/playwright install-deps chromium
+# Bake the browser engine's OS libraries via the LOCAL playwright CLI (already in
+# node_modules) so the version matches the runtime and no throwaway playwright is
+# downloaded. install-deps runs apt-get itself (we are root at build time).
+RUN ./node_modules/.bin/playwright install-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
 
 # Writable location for the local cache, on-device models, browser binary, and
 # encrypted keys. The volume persists all of these across container runs.

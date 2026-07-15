@@ -147,11 +147,13 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3b. Explicit sudo-probe graceful-handling proof: run the deps-strategy probe
-#     directly as USER node. slim installs `sudo`, so the non-passwordless probe
-#     must exit non-zero WITHOUT a spawn ENOENT and WITHOUT crashing.
+# 3b. Explicit sudo-ABSENT graceful-handling proof. The image ships NO sudo, so
+#     the deps-strategy probe hits a raw spawn ENOENT — which the warmup code
+#     must swallow as the 'skip' strategy (never crash). Two assertions:
+#       (a) sudo really is absent and a raw spawn surfaces ENOENT;
+#       (b) despite that, step 3's warmup already exited 0 with playwright ok.
 # ---------------------------------------------------------------------------
-section "arm64 default: sudo-probe graceful handling (as node)"
+section "arm64 default: sudo-absent graceful handling (as node)"
 if [[ "$(status_of build:arm64:default)" == "PASS" ]]; then
   SUDO_LOG="$(mktemp)"
   set +e
@@ -163,18 +165,19 @@ if [[ "$(status_of build:arm64:default)" == "PASS" ]]; then
   set -e
   echo "--- sudo probe output ---"
   cat "$SUDO_LOG"
-  # Graceful == process exited 0 (no crash) AND no spawn ENOENT (sudo exists),
-  # AND the probe itself returned non-zero (no passwordless config) => 'skip'.
+  # (a) raw spawn shows ENOENT (sudo truly absent) and the probing process
+  #     itself did not crash; (b) the warmup in step 3 (which exercises the real
+  #     detectDepsStrategy path over this exact ENOENT) passed.
   if [[ $SUDO_CODE -eq 0 ]] \
-     && grep -q 'spawn_error=none' "$SUDO_LOG" \
-     && ! grep -q 'sudo_status=0' "$SUDO_LOG" ; then
-    pass "sudo-probe:arm64:default"
+     && grep -q 'spawn_error=ENOENT' "$SUDO_LOG" \
+     && [[ "$(status_of warmup:arm64:default)" == "PASS" ]]; then
+    pass "sudo-absent:arm64:default"
   else
-    fail "sudo-probe:arm64:default"
+    fail "sudo-absent:arm64:default"
   fi
   rm -f "$SUDO_LOG"
 else
-  unverified "sudo-probe:arm64:default" "build failed"
+  unverified "sudo-absent:arm64:default" "build failed"
 fi
 
 # ---------------------------------------------------------------------------

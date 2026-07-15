@@ -181,4 +181,23 @@ describe('browser-pool anti-bot fast-fail (D6)', () => {
     expect(res.html).toContain('partial shell content');
     await pool.shutdown();
   });
+
+  it('an abort DURING the settle wait propagates the abort — never masquerades as a challenge error', async () => {
+    vi.useFakeTimers();
+    state.status = 403;
+    state.bodies = [CHALLENGE_INTERSTITIAL, CHALLENGE_INTERSTITIAL];
+
+    const controller = new AbortController();
+    const pool = new MultiBrowserPool();
+    const p = pool.fetchWithBrowser('https://blocked.example/', { signal: controller.signal });
+    const captured = p.catch((e) => e);
+    // Abort mid-settle before the 5s window elapses.
+    await vi.advanceTimersByTimeAsync(1000);
+    controller.abort(new DOMException('caller deadline', 'AbortError'));
+    await vi.advanceTimersByTimeAsync(10);
+    const err = await captured;
+    expect(err).not.toBeInstanceOf(ChallengeBlockedError);
+    expect((err as Error).name).toBe('AbortError');
+    await pool.shutdown();
+  });
 });

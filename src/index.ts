@@ -17,6 +17,7 @@ import { runStatus } from './cli/status.js';
 import { runBackfill } from './cli/backfill.js';
 import { runVerifyE2E } from './cli/verify.js';
 import { printHelp, printVersion, printUnknownCommand } from './cli/help.js';
+import { runTool } from './cli/tool-run.js';
 import { getConfig } from './config.js';
 import { shutdownCli } from './cli/shutdown.js';
 
@@ -121,6 +122,22 @@ switch (command) {
 
   case 'verify': {
     const code = await runVerifyE2E(args);
+    await exitCli(code);
+    break;
+  }
+
+  case 'search':
+  case 'fetch':
+  case 'crawl':
+  case 'extract':
+  case 'cache':
+  case 'find-similar':
+  case 'find_similar':
+  case 'research':
+  case 'agent':
+  case 'diff':
+  case 'watch': {
+    const code = await runTool(command, args);
     await exitCli(code);
     break;
   }

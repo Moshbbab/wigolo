@@ -15,6 +15,18 @@ export type Command =
   | 'status'
   | 'backfill'
   | 'verify'
+  // One-shot tool commands (D7) — thin over the REPL executors.
+  | 'search'
+  | 'fetch'
+  | 'crawl'
+  | 'extract'
+  | 'cache'
+  | 'find-similar'
+  | 'find_similar'
+  | 'research'
+  | 'agent'
+  | 'diff'
+  | 'watch'
   | 'help'
   | 'version'
   | 'unknown';
@@ -41,6 +53,18 @@ const KNOWN_COMMANDS: ReadonlySet<string> = new Set([
   'status',
   'backfill',
   'verify',
+  // One-shot tool commands (D7).
+  'search',
+  'fetch',
+  'crawl',
+  'extract',
+  'cache',
+  'find-similar',
+  'find_similar',
+  'research',
+  'agent',
+  'diff',
+  'watch',
 ]);
 
 const HELP_ALIASES: ReadonlySet<string> = new Set(['--help', '-h', 'help']);

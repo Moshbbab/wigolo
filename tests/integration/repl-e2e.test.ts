@@ -96,3 +96,69 @@ describe('REPL integration', () => {
     expect(stdout).toContain('Goodbye');
   }, 10_000);
 });
+
+// One-shot CLI (`wigolo <tool> <args>`) — spawns `node dist/index.js <tool>`.
+function runTool(
+  tool: string,
+  args: string[] = [],
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('node', [BIN_PATH, tool, ...args], {
+      env: {
+        ...process.env,
+        LOG_LEVEL: 'error',
+        WIGOLO_DATA_DIR: join(import.meta.dirname, '..', 'fixtures', 'repl-test-data'),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+    child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ stdout, stderr, exitCode: code ?? 1 }));
+  });
+}
+
+const ALL_TOOLS = [
+  'search', 'fetch', 'crawl', 'extract', 'cache',
+  'find-similar', 'research', 'agent', 'diff', 'watch',
+] as const;
+
+describe('one-shot CLI integration', () => {
+  for (const tool of ALL_TOOLS) {
+    it(`${tool} --help exits 0 with usage on stdout`, { retry: 3 }, async () => {
+      const { stdout, exitCode } = await runTool(tool, ['--help']);
+      expect(exitCode).toBe(0);
+      // The tool name appears in its own usage line.
+      expect(stdout.toLowerCase()).toContain(tool === 'find-similar' ? 'find' : tool);
+    }, 20_000);
+  }
+
+  it('find_similar alias --help exits 0', { retry: 3 }, async () => {
+    const { stdout, exitCode } = await runTool('find_similar', ['--help']);
+    expect(exitCode).toBe(0);
+    expect(stdout.toLowerCase()).toContain('find');
+  }, 20_000);
+
+  it('cache stats --json: exit 0 and full stdout parses (zero log leakage)', { retry: 3 }, async () => {
+    const { stdout, exitCode } = await runTool('cache', ['stats', '--json']);
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed.stats).toBeDefined();
+  }, 20_000);
+
+  it('watch list --json: exit 0 and full stdout parses to a job set', { retry: 3 }, async () => {
+    const { stdout, exitCode } = await runTool('watch', ['list', '--json']);
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout.trim());
+    expect(Array.isArray(parsed.jobs)).toBe(true);
+  }, 20_000);
+
+  it('a failing invocation exits 1 with a parseable JSON error under --json', { retry: 3 }, async () => {
+    const { stdout, exitCode } = await runTool('fetch', ['not-a-valid-url', '--json']);
+    expect(exitCode).toBe(1);
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed.error).toBeDefined();
+  }, 20_000);
+});

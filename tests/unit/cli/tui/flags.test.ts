@@ -62,6 +62,12 @@ describe('parseInitFlags — flags', () => {
       skipVerify: true,
       plain: true,
       help: false,
+      // Headless-first (D8) additions — default false when absent.
+      wizard: false,
+      warmup: false,
+      json: false,
+      provider: undefined,
+      search: undefined,
     });
   });
 });

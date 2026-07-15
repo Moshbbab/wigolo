@@ -17,6 +17,9 @@ const INIT_KNOWN = new Set([
   '-h',
   '--provider',
   '--search',
+  '--wizard',
+  '--warmup',
+  '--json',
 ]);
 
 const SETUP_KNOWN = new Set([
@@ -26,6 +29,7 @@ const SETUP_KNOWN = new Set([
   '--plain',
   '--help',
   '-h',
+  '--json',
 ]);
 
 interface Raw {
@@ -34,6 +38,7 @@ interface Raw {
   skipVerify: boolean;
   plain: boolean;
   help: boolean;
+  json: boolean;
 }
 
 function parseAgentsValue(value: string): string[] {
@@ -69,6 +74,7 @@ function parseCommon(args: readonly string[], known: ReadonlySet<string>): Raw {
     skipVerify: false,
     plain: false,
     help: false,
+    json: false,
   };
 
   let i = 0;
@@ -96,6 +102,12 @@ function parseCommon(args: readonly string[], known: ReadonlySet<string>): Raw {
 
     if (token === '--help' || token === '-h') {
       raw.help = true;
+      i++;
+      continue;
+    }
+
+    if (token === '--json') {
+      raw.json = true;
       i++;
       continue;
     }
@@ -129,14 +141,28 @@ function parseCommon(args: readonly string[], known: ReadonlySet<string>): Raw {
 const VALID_PROVIDERS = ['anthropic', 'openai', 'gemini', 'ollama'] as const;
 const VALID_SEARCH_BACKENDS = ['core', 'searxng', 'hybrid'] as const;
 
-function parseInitOnlyFlags(args: readonly string[]): { provider?: string; search?: string } {
+function parseInitOnlyFlags(args: readonly string[]): { provider?: string; search?: string; wizard: boolean; warmup: boolean } {
   let provider: string | undefined;
   let search: string | undefined;
+  let wizard = false;
+  let warmup = false;
 
   let i = 0;
   while (i < args.length) {
     const token = args[i];
     if (!token) { i++; continue; }
+
+    if (token === '--wizard') {
+      wizard = true;
+      i++;
+      continue;
+    }
+
+    if (token === '--warmup') {
+      warmup = true;
+      i++;
+      continue;
+    }
 
     if (token.startsWith('--provider=')) {
       const value = token.slice('--provider='.length);
@@ -199,18 +225,21 @@ function parseInitOnlyFlags(args: readonly string[]): { provider?: string; searc
     i++;
   }
 
-  return { provider, search };
+  return { provider, search, wizard, warmup };
 }
 
 export function parseInitFlags(args: readonly string[]): InitFlags {
   const raw = parseCommon(args, INIT_KNOWN);
-  const { provider, search } = parseInitOnlyFlags(args);
+  const { provider, search, wizard, warmup } = parseInitOnlyFlags(args);
   return {
     nonInteractive: raw.nonInteractive,
     agents: raw.agents,
     skipVerify: raw.skipVerify,
     plain: raw.plain,
     help: raw.help,
+    wizard,
+    warmup,
+    json: raw.json,
     provider,
     search,
   };
@@ -227,5 +256,6 @@ export function parseSetupMcpFlags(args: readonly string[]): SetupMcpFlags {
     agents: raw.agents,
     plain: raw.plain,
     help: raw.help,
+    json: raw.json,
   };
 }

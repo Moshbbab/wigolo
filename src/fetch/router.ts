@@ -455,7 +455,12 @@ export class SmartRouter {
       const logger = createLogger('fetch');
       if (fallback) {
         logger.info('browser engine not ready within budget — returning lower-tier content with note', { url });
-        return { ...fallback, warning: BROWSER_INSTALLING_NOTE };
+        // The browser was the escalation target because the lower tier returned
+        // a challenge shell (or an anti-bot-status challenge body). If we cannot
+        // acquire it, we must NOT fall back to returning that shell as content —
+        // guard it so a challenge fallback becomes blocked_by_challenge, while
+        // legit lower-tier content passes through unchanged with the note.
+        return this.guardChallengeShell({ ...fallback, warning: BROWSER_INSTALLING_NOTE });
       }
       logger.info('browser engine not ready within budget and no lower-tier content — failing with actionable error', { url });
       return {

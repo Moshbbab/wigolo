@@ -12,6 +12,7 @@ import type { HttpClient, BrowserPoolInterface, TlsFetcher } from '../../../src/
 import type { RawFetchResult } from '../../../src/types.js';
 import { getAuthOptions } from '../../../src/fetch/auth.js';
 import { ChallengeBlockedError } from '../../../src/fetch/browser-pool.js';
+import { BrowserAcquirer, BROWSER_INSTALLING_NOTE } from '../../../src/fetch/browser-acquire.js';
 
 const FULL_HTML = `
 <html><head><title>Test</title></head>
@@ -646,5 +647,104 @@ describe('SmartRouter: 200 challenge shell (P0 long-tail #5)', () => {
     expect(browserPool.fetchWithBrowser).toHaveBeenCalled();
     expect('error' in result).toBe(false);
     expect((result as RawFetchResult).method).toBe('playwright');
+  });
+});
+
+describe('SmartRouter: browser-unavailable fallback must not leak a challenge shell', () => {
+  const originalEnv = process.env;
+  beforeEach(() => {
+    process.env = { ...originalEnv, BROWSER_FALLBACK_THRESHOLD: '3', WIGOLO_TLS_TIER: 'off' };
+    resetConfig();
+    vi.mocked(getAuthOptions).mockResolvedValue(null);
+  });
+  afterEach(() => {
+    process.env = originalEnv;
+    resetConfig();
+    vi.clearAllMocks();
+  });
+
+  // A BrowserAcquirer stub that always reports the engine is not ready, so the
+  // browserFetch fallback branch is exercised.
+  function unavailableAcquirer(): BrowserAcquirer {
+    const acquirer = new BrowserAcquirer();
+    vi.spyOn(acquirer, 'ensureBrowser').mockResolvedValue('unavailable');
+    return acquirer;
+  }
+
+  it('MUST-FIRE: 200 shell escalates, browser unavailable → blocked_by_challenge (never the shell html)', async () => {
+    const httpClient: HttpClient = {
+      fetch: vi.fn(async () => makeHttpResult(DATADOME_SHELL_200)),
+    };
+    const browserPool: BrowserPoolInterface = {
+      fetchWithBrowser: vi.fn(async (url: string) => makeBrowserResult(url)),
+    };
+    const router = new SmartRouter({
+      httpClient,
+      browserPool,
+      pdfProbe: async () => false,
+      browserAcquirer: unavailableAcquirer(),
+    });
+    const result = await router.fetch('https://blocked.example/');
+    // The browser could not be acquired, so the shell would have been the
+    // fallback — the guard must convert it to a structured error instead.
+    expect('error' in result).toBe(true);
+    const err = result as { error: string; stage: string; error_reason: string };
+    expect(err.error).toBe('blocked_by_challenge');
+    expect(err.stage).toBe('fetch');
+    // The interstitial markdown must never surface.
+    expect(JSON.stringify(result)).not.toContain('dd-loader');
+  });
+
+  it('MUST-FIRE: 403 challenge-body escalation, browser unavailable → blocked_by_challenge (pre-existing site, new contract)', async () => {
+    const CHALLENGE_403 =
+      '<html><head><title>Just a moment...</title></head><body>' +
+      '<div class="cf-browser-verification"></div></body></html>';
+    const httpClient: HttpClient = {
+      fetch: vi.fn(async () => ({
+        url: 'https://blocked.example/',
+        finalUrl: 'https://blocked.example/',
+        html: CHALLENGE_403,
+        contentType: 'text/html',
+        statusCode: 403,
+        headers: {},
+      })),
+    };
+    const browserPool: BrowserPoolInterface = {
+      fetchWithBrowser: vi.fn(async (url: string) => makeBrowserResult(url)),
+    };
+    const router = new SmartRouter({
+      httpClient,
+      browserPool,
+      pdfProbe: async () => false,
+      browserAcquirer: unavailableAcquirer(),
+    });
+    const result = await router.fetch('https://blocked.example/');
+    expect('error' in result).toBe(true);
+    expect((result as { error: string }).error).toBe('blocked_by_challenge');
+    expect(JSON.stringify(result)).not.toContain('cf-browser-verification');
+  });
+
+  it('MUST-NOT-FIRE: browser unavailable + legit lower-tier content → content returned WITH installing warning', async () => {
+    // A known-SPA domain returns thin-but-legit content (empty SPA shell, no
+    // challenge markers): the SPA escalation fires, the browser is unavailable,
+    // and the fallback (the lower-tier content) must pass through untouched
+    // with the installing note — the guard must not intercept it.
+    const httpClient: HttpClient = {
+      fetch: vi.fn(async () => makeHttpResult(SPA_SHELL_HTML)),
+    };
+    const browserPool: BrowserPoolInterface = {
+      fetchWithBrowser: vi.fn(async (url: string) => makeBrowserResult(url)),
+    };
+    const router = new SmartRouter({
+      httpClient,
+      browserPool,
+      pdfProbe: async () => false,
+      browserAcquirer: unavailableAcquirer(),
+    });
+    const result = await router.fetch('https://spa.example/');
+    expect('error' in result).toBe(false);
+    const raw = result as RawFetchResult;
+    expect(raw.html).toBe(SPA_SHELL_HTML);
+    expect(raw.warning).toBe(BROWSER_INSTALLING_NOTE);
   });
 });

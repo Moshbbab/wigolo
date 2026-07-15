@@ -460,7 +460,12 @@ async function runInitPlain(flags: InitFlagsResolved): Promise<number> {
   // write), and the probe can return the stale backend written before this run.
   const { resetPersistedConfig } = await import('../persisted-config.js');
   resetPersistedConfig();
-  const statuses = await probeSetupStatus(defaultProbeDeps());
+  // Engine-only mode = non-interactive with no `--agents` given. Registering no
+  // agent is then a deliberate choice, not a setup failure. In interactive mode
+  // the user always passes through the agent-selection step, so agents ARE
+  // requested. `agentsRequested` decides whether an empty agent list fails setup.
+  const agentsRequested = !(flags.nonInteractive && flags.agents.length === 0);
+  const statuses = await probeSetupStatus(defaultProbeDeps(), { agentsRequested });
   const summary = summarizeSetup(statuses);
   out();
   for (const line of summary.lines) out(`  ${line}`);

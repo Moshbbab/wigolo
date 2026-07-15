@@ -7,8 +7,8 @@ export type VerifyCheckId =
 
 const TABLE: Record<VerifyCheckId, string> = {
   'searxng': 'Search engine failed to start. Try: npx wigolo warmup --force',
-  'reranker': 'ML reranker is not installed. Run: npx wigolo warmup',
-  'embeddings': 'Embeddings model is not installed. Run: npx wigolo warmup',
+  'reranker': 'ML reranker downloads on first use. Pre-cache: npx wigolo warmup --reranker',
+  'embeddings': 'Embeddings model downloads on first use. Pre-cache: npx wigolo warmup --embeddings',
 };
 
 export function suggestionFor(id: VerifyCheckId): string {

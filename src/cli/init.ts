@@ -1,6 +1,7 @@
 import { parseInitFlags, FlagParseError } from './tui/flags.js';
 import type { LLMProvider } from '../integrations/cloud/llm/types.js';
 import { probeOllama, resolveProbeBaseUrl, maybeOllamaHint } from './ollama-probe.js';
+import { isPackagedBinary, BINARY_TUI_UNAVAILABLE_MESSAGE } from '../util/packaged.js';
 
 /**
  * Probe for a local Ollama server and, when one is reachable AND no LLM is
@@ -87,6 +88,14 @@ export async function runInit(args: string[]): Promise<number> {
   // Ink mounts ONLY under an explicit --wizard flag (and never in --plain /
   // --non-interactive / CI / non-TTY contexts, which can't host it).
   const useInk = flags.wizard && !flags.plain && !flags.nonInteractive && isTTY && !isCI;
+
+  // The Ink TUI stack cannot boot inside the standalone binary (dependency-level
+  // top-level await). Headless-first: surface the actionable fallback and route
+  // to the fully-headless plain flow instead of crashing on an ESM-TLA require.
+  if (useInk && isPackagedBinary()) {
+    process.stderr.write(`${BINARY_TUI_UNAVAILABLE_MESSAGE}\n`);
+    return runInitPlain(flags);
+  }
 
   if (useInk) {
     return runInitWizard(flags);

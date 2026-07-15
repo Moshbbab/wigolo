@@ -20,6 +20,7 @@
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { getConfig } from '../config.js';
+import { isPackagedBinary, BINARY_TUI_UNAVAILABLE_MESSAGE } from '../util/packaged.js';
 import type { CategoryDef, FieldDef } from './tui/schema/types.js';
 
 const CONFIG_USAGE = [
@@ -326,7 +327,12 @@ export async function runConfig(args: string[]): Promise<number> {
   // --json forces headless machine output regardless of TTY.
   const useInk = !flags.plain && !flags.json && isTTY && !isCI;
 
-  if (useInk) {
+  // The Ink TUI stack cannot boot inside the standalone binary (dependency-level
+  // top-level await). Headless-first: surface the actionable fallback, then fall
+  // through to the plain settings printout below instead of crashing.
+  if (useInk && isPackagedBinary()) {
+    process.stderr.write(`${BINARY_TUI_UNAVAILABLE_MESSAGE}\n`);
+  } else if (useInk) {
     return runInkConfig({
       isTTY,
       ci: isCI,

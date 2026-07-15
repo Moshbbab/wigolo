@@ -177,8 +177,11 @@ describe('runInit --non-interactive', () => {
     // Honest-setup contract: when summarizeSetup reports a required component
     // failed (exitCode 1), runInitPlain must propagate that out of runInit —
     // it cannot silently return 0. Guards the failure path, not just success.
+    // Fixture uses the agents-requested-but-failed case: since wave-2 S8 a
+    // missing browser is 'lazy' (self-installs on first use) and can no longer
+    // produce this state, but a requested agent that failed to register still does.
     summarizeSetupMock.mockReturnValueOnce({
-      lines: ['Setup: 5/6 ready', '  ✗ browser — install failed'],
+      lines: ['Setup: 5/6 ready', '  ✗ agents(none) — no agent configured'],
       readyCount: 5,
       total: 6,
       requiredFailed: true,
@@ -205,15 +208,82 @@ describe('runInit --non-interactive', () => {
     expect(runWarmupMock).not.toHaveBeenCalled();
   });
 
-  it('--non-interactive with NO --agents sets up the engine only (no gatekeeping)', async () => {
+  it('engine-only (no --agents) probes with agentsRequested:false; JSON status ok, exit 0', async () => {
+    // Case (a): a non-interactive install with no --agents is engine-only mode.
+    // init must tell the classifier NOT to require agents, and the honest
+    // summary (mocked ok) yields exit 0 + status "ok".
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c: any) => { writes.push(String(c)); return true; });
+    let code: number;
+    try {
+      code = await runInit(['--non-interactive', '--skip-verify', '--json']);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(code).toBe(0);
+    // The classifier was told agents were NOT requested.
+    expect(probeSetupStatusMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ agentsRequested: false }),
+    );
+    const parsed = JSON.parse(writes.join('').trim());
+    expect(parsed.status).toBe('ok');
+    expect(parsed.requiredFailed).toBe(false);
+  });
+
+  it('--agents given → probes with agentsRequested:true (guard stays active)', async () => {
+    // Case (b) at the init seam: because --agents was given, init must keep the
+    // failure guard active by passing agentsRequested:true to the classifier.
+    await runInit(['--non-interactive', '--agents=cursor', '--skip-verify']);
+    expect(probeSetupStatusMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ agentsRequested: true }),
+    );
+  });
+
+  it('json status agrees with exit code on the failure path (status error, exit 1)', async () => {
+    // Case (d): when the classifier reports a required failure, the --json status
+    // and the process exit code must both signal error — never disagree.
+    summarizeSetupMock.mockReturnValueOnce({
+      lines: ['Setup: 5/6 ready', '  ✗ agents(none) — no agent configured'],
+      readyCount: 5,
+      total: 6,
+      requiredFailed: true,
+      exitCode: 1,
+    });
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c: any) => { writes.push(String(c)); return true; });
+    let code: number;
+    try {
+      code = await runInit(['--non-interactive', '--agents=cursor', '--skip-verify', '--json']);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(code).toBe(1);
+    const parsed = JSON.parse(writes.join('').trim());
+    expect(parsed.status).toBe('error');
+    // Agreement: a non-'ok' status must line up with a non-zero exit.
+    expect(parsed.status === 'ok').toBe(code === 0);
+  });
+
+  it('--non-interactive with NO --agents sets up config only, no downloads (no gatekeeping)', async () => {
     // Marketing contract: wigolo works for ANY MCP-capable agent, so a user whose
-    // agent has no built-in installer (e.g. Hermes) must still install the engine
-    // headlessly. --agents is optional: warmup runs, agent wiring is skipped, exit 0.
+    // agent has no built-in installer (e.g. Hermes) must still complete init
+    // headlessly. --agents is optional: agent wiring is skipped, exit 0.
+    // INVERTED (D8): engine setup is now lazy — components download on first use,
+    // so a default init runs NO warmup. --warmup opts back in (covered below).
     const code = await runInit(['--non-interactive', '--skip-verify']);
     expect(code).toBe(0);
-    expect(runWarmupMock).toHaveBeenCalledTimes(1); // engine setup still happens
+    expect(runWarmupMock).not.toHaveBeenCalled(); // headless-first: no download
     expect(selectAgentsMock).not.toHaveBeenCalled(); // no interactive prompt
     expect(applyConfigsMock).not.toHaveBeenCalled(); // no agent wiring
+  });
+
+  it('--non-interactive --warmup runs runWarmup(["--all"]) exactly once (opt-in pre-cache)', async () => {
+    const code = await runInit(['--non-interactive', '--skip-verify', '--warmup']);
+    expect(code).toBe(0);
+    expect(runWarmupMock).toHaveBeenCalledTimes(1);
+    expect(runWarmupMock.mock.calls[0]?.[0]).toEqual(['--all']);
   });
 
   it('--non-interactive with no agents but --provider still persists the provider', async () => {

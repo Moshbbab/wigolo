@@ -67,6 +67,58 @@ describe('parseInitFlags provider/search', () => {
   });
 });
 
+describe('parseInitFlags --wizard / --warmup / --json (headless-first)', () => {
+  it('--wizard is parsed (opts into the Ink wizard)', () => {
+    // WHY: headless-first — Ink now mounts ONLY under an explicit --wizard flag.
+    // The parser must recognise it, or the flip is unreachable.
+    expect(parseInitFlags(['--wizard']).wizard).toBe(true);
+  });
+
+  it('wizard defaults to false when absent', () => {
+    expect(parseInitFlags(['--non-interactive', '--agents=cursor']).wizard).toBe(false);
+  });
+
+  it('--warmup is parsed (opts back into pre-caching)', () => {
+    // WHY: mandatory warmup is gone; --warmup is the only way to re-run it.
+    expect(parseInitFlags(['--warmup']).warmup).toBe(true);
+  });
+
+  it('warmup defaults to false when absent', () => {
+    expect(parseInitFlags(['--non-interactive', '--agents=cursor']).warmup).toBe(false);
+  });
+
+  it('--json is parsed (machine-readable summary)', () => {
+    expect(parseInitFlags(['--json']).json).toBe(true);
+  });
+
+  it('json defaults to false when absent', () => {
+    expect(parseInitFlags(['--non-interactive', '--agents=cursor']).json).toBe(false);
+  });
+
+  it('--wizard and --warmup and --json combine without error', () => {
+    const f = parseInitFlags(['--wizard', '--warmup', '--json']);
+    expect(f.wizard).toBe(true);
+    expect(f.warmup).toBe(true);
+    expect(f.json).toBe(true);
+  });
+});
+
+describe('parseSetupMcpFlags --json', () => {
+  it('--json is parsed for setup mcp', () => {
+    expect(parseSetupMcpFlags(['--json']).json).toBe(true);
+  });
+
+  it('json defaults to false when absent', () => {
+    expect(parseSetupMcpFlags(['--non-interactive', '--agents=cursor']).json).toBe(false);
+  });
+
+  it('setup mcp still rejects init-only --wizard/--warmup (init-only flags)', () => {
+    // WHY: --wizard/--warmup are init-specific; setup mcp has no wizard/warmup step.
+    expect(() => parseSetupMcpFlags(['--wizard'])).toThrow(FlagParseError);
+    expect(() => parseSetupMcpFlags(['--warmup'])).toThrow(FlagParseError);
+  });
+});
+
 describe('parseSetupMcpFlags rejects init-only flags', () => {
   it('--provider=openai is rejected by parseSetupMcpFlags (init-only)', () => {
     expect(() => parseSetupMcpFlags(['--provider=openai'])).toThrow(FlagParseError);

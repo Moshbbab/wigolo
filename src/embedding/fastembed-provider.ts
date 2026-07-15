@@ -1,5 +1,9 @@
 import { join } from 'node:path';
-import { FlagEmbedding, EmbeddingModel } from 'fastembed';
+// Type-only: the runtime module is dynamic-imported inside getModel() so the
+// native ONNX runtime is NOT mapped into the process at boot (D2 idle-footprint
+// contract) — a static import loads the native binding the moment any file in
+// the boot chain touches this module.
+import type { FlagEmbedding } from 'fastembed';
 import type { EmbedProvider } from '../providers/embed-provider.js';
 import { getConfig } from '../config.js';
 import { createLogger } from '../logger.js';
@@ -33,10 +37,14 @@ export class FastembedEmbedProvider implements EmbedProvider {
     if (this.modelPromise) return this.modelPromise;
     log.info('Loading embedding model', { modelId: this.modelId });
     const cacheDir = join(getConfig().dataDir, 'fastembed');
-    this.modelPromise = FlagEmbedding.init({
-      model: EmbeddingModel.BGESmallENV15,
-      cacheDir,
-    }).then(m => {
+    this.modelPromise = import('fastembed')
+      .then(({ FlagEmbedding, EmbeddingModel }) =>
+        FlagEmbedding.init({
+          model: EmbeddingModel.BGESmallENV15,
+          cacheDir,
+        }),
+      )
+      .then(m => {
       this.model = m;
       log.info('Embedding model ready', { modelId: this.modelId, dim: this.dim });
       return m;

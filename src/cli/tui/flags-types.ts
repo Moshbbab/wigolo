@@ -16,6 +16,12 @@ export interface InitFlags {
   skipVerify: boolean;
   plain: boolean;
   help: boolean;
+  /** Opt into the Ink wizard. Default init is the plain path on TTY and non-TTY alike. */
+  wizard: boolean;
+  /** Opt back into pre-caching components (`runWarmup(['--all'])`). No warmup runs by default. */
+  warmup: boolean;
+  /** Emit a machine-readable JSON summary on stdout instead of the human report. */
+  json: boolean;
   provider?: string;
   search?: string;
 }
@@ -25,6 +31,8 @@ export interface SetupMcpFlags {
   agents: readonly string[];
   plain: boolean;
   help: boolean;
+  /** Emit a machine-readable JSON summary on stdout instead of the human report. */
+  json: boolean;
 }
 
 export class FlagParseError extends Error {

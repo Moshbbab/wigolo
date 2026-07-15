@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { resetConfig } from '../../../src/config.js';
+import { resolveSearchBackend, getBootstrapState } from '../../../src/searxng/bootstrap.js';
 
 vi.mock('../../../src/cache/db.js', () => ({
   initDatabase: vi.fn(),
@@ -76,6 +77,41 @@ describe('DaemonHttpServer', () => {
     const { DaemonHttpServer } = await import('../../../src/daemon/http-server.js');
     const daemon = new DaemonHttpServer({ port: 4444, host: '127.0.0.1' });
     expect(daemon).toBeDefined();
+  });
+
+  it('start() performs ZERO sidecar activity on the default core backend', async () => {
+    // WHY (D1): the daemon must honor the same zero-config gate as stdio mode.
+    // A default `core` daemon must not resolve/probe/install the sidecar.
+    delete process.env.WIGOLO_SEARCH;
+    resetConfig();
+    const { DaemonHttpServer } = await import('../../../src/daemon/http-server.js');
+    const daemon = new DaemonHttpServer({ port: 0, host: '127.0.0.1' });
+    try {
+      await daemon.start();
+      // bootstrapSearxng runs detached via .catch(); let its microtask settle.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(resolveSearchBackend).not.toHaveBeenCalled();
+    } finally {
+      await daemon.stop();
+    }
+  });
+
+  it('start() DOES resolve the backend when WIGOLO_SEARCH=searxng and the sidecar is installed (positive control)', async () => {
+    process.env.WIGOLO_SEARCH = 'searxng';
+    resetConfig();
+    vi.mocked(getBootstrapState).mockReturnValue({ status: 'ready', searxngPath: '/tmp/searxng' });
+    const { DaemonHttpServer } = await import('../../../src/daemon/http-server.js');
+    const daemon = new DaemonHttpServer({ port: 0, host: '127.0.0.1' });
+    try {
+      await daemon.start();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(resolveSearchBackend).toHaveBeenCalled();
+    } finally {
+      await daemon.stop();
+      delete process.env.WIGOLO_SEARCH;
+      vi.mocked(getBootstrapState).mockReturnValue(null);
+      resetConfig();
+    }
   });
 
   it('start() returns the listening URL', async () => {
@@ -348,6 +384,169 @@ describe('DaemonHttpServer', () => {
         body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 1, params: {} }),
       });
       expect(resp.status).toBe(400);
+    } finally {
+      await daemon.stop();
+    }
+  });
+});
+
+describe('DaemonHttpServer — POST /admin/reset-breakers auth (D9)', () => {
+  // WHY (D9 review BLOCKER): the admin reset route is a privileged control
+  // surface. Loopback source-IP is NOT the control — cloudflared remote-serve
+  // delivers everything from 127.0.0.1. The boundary is a random bearer token
+  // written owner-only to disk PLUS a browser-Origin reject PLUS a Host
+  // allowlist. Each negative below encodes one of those guards.
+  let dir: string;
+
+  beforeEach(async () => {
+    resetConfig();
+    vi.clearAllMocks();
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    dir = mkdtempSync(join(tmpdir(), 'wigolo-admin-route-'));
+    process.env.WIGOLO_DATA_DIR = dir;
+    resetConfig();
+  });
+
+  afterEach(async () => {
+    delete process.env.WIGOLO_DATA_DIR;
+    resetConfig();
+    const { rmSync } = await import('node:fs');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('writes a 0600 admin token file at daemon start', async () => {
+    const { DaemonHttpServer } = await import('../../../src/daemon/http-server.js');
+    const { adminTokenPath, readAdminToken } = await import('../../../src/daemon/admin-token.js');
+    const { existsSync, statSync } = await import('node:fs');
+    const daemon = new DaemonHttpServer({ port: 0, host: '127.0.0.1' });
+    try {
+      await daemon.start();
+      expect(existsSync(adminTokenPath(dir))).toBe(true);
+      expect(readAdminToken(dir)).toBeTruthy();
+      if (process.platform !== 'win32') {
+        expect(statSync(adminTokenPath(dir)).mode & 0o777).toBe(0o600);
+      }
+    } finally {
+      await daemon.stop();
+    }
+  });
+
+  it('valid bearer token resets breakers and returns 200 with a snapshot', async () => {
+    const { DaemonHttpServer } = await import('../../../src/daemon/http-server.js');
+    const { readAdminToken } = await import('../../../src/daemon/admin-token.js');
+    const daemon = new DaemonHttpServer({ port: 0, host: '127.0.0.1' });
+    try {
+      const url = await daemon.start();
+      const token = readAdminToken(dir);
+      const resp = await fetch(`${url}/admin/reset-breakers`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(resp.status).toBe(200);
+      const body = await resp.json();
+      expect(body).toHaveProperty('reset', true);
+      expect(Array.isArray(body.breakers)).toBe(true);
+    } finally {
+      await daemon.stop();
+    }
+  });
+
+  it('NEGATIVE: no Authorization header → 401', async () => {
+    const { DaemonHttpServer } = await import('../../../src/daemon/http-server.js');
+    const daemon = new DaemonHttpServer({ port: 0, host: '127.0.0.1' });
+    try {
+      const url = await daemon.start();
+      const resp = await fetch(`${url}/admin/reset-breakers`, { method: 'POST' });
+      expect(resp.status).toBe(401);
+    } finally {
+      await daemon.stop();
+    }
+  });
+
+  it('NEGATIVE: wrong bearer token → 401', async () => {
+    const { DaemonHttpServer } = await import('../../../src/daemon/http-server.js');
+    const daemon = new DaemonHttpServer({ port: 0, host: '127.0.0.1' });
+    try {
+      const url = await daemon.start();
+      const resp = await fetch(`${url}/admin/reset-breakers`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer not-the-real-token' },
+      });
+      expect(resp.status).toBe(401);
+    } finally {
+      await daemon.stop();
+    }
+  });
+
+  it('NEGATIVE: valid token BUT a browser Origin header → 403', async () => {
+    // A legitimate CLI never sets Origin; a browser always does. An Origin on an
+    // admin request means a page is trying to drive the daemon — reject even
+    // with a correct token (a CSRF-style guard).
+    const { DaemonHttpServer } = await import('../../../src/daemon/http-server.js');
+    const { readAdminToken } = await import('../../../src/daemon/admin-token.js');
+    const daemon = new DaemonHttpServer({ port: 0, host: '127.0.0.1' });
+    try {
+      const url = await daemon.start();
+      const token = readAdminToken(dir);
+      const resp = await fetch(`${url}/admin/reset-breakers`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Origin: 'https://evil.example.com',
+        },
+      });
+      expect(resp.status).toBe(403);
+    } finally {
+      await daemon.stop();
+    }
+  });
+
+  it('NEGATIVE: non-allowlisted Host header → 403', async () => {
+    // DNS-rebinding guard: only localhost / the configured host may reach the
+    // admin route. A spoofed Host is rejected before the token is even checked.
+    const { DaemonHttpServer } = await import('../../../src/daemon/http-server.js');
+    const { readAdminToken } = await import('../../../src/daemon/admin-token.js');
+    const http = await import('node:http');
+    const daemon = new DaemonHttpServer({ port: 0, host: '127.0.0.1' });
+    try {
+      const url = await daemon.start();
+      const token = readAdminToken(dir);
+      const parsed = new URL(url);
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = http.request(
+          {
+            hostname: parsed.hostname,
+            port: parsed.port,
+            path: '/admin/reset-breakers',
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Host: 'attacker.example.com',
+            },
+          },
+          (res) => {
+            resolve(res.statusCode ?? 0);
+            res.destroy();
+          },
+        );
+        req.on('error', reject);
+        req.end();
+      });
+      expect(status).toBe(403);
+    } finally {
+      await daemon.stop();
+    }
+  });
+
+  it('GET /admin/reset-breakers is not a valid route → 404', async () => {
+    const { DaemonHttpServer } = await import('../../../src/daemon/http-server.js');
+    const daemon = new DaemonHttpServer({ port: 0, host: '127.0.0.1' });
+    try {
+      const url = await daemon.start();
+      const resp = await fetch(`${url}/admin/reset-breakers`, { method: 'GET' });
+      expect(resp.status).toBe(404);
     } finally {
       await daemon.stop();
     }

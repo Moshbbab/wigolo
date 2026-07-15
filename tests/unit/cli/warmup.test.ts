@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../../../src/cli/tui/run-command.js', () => ({
   runCommand: vi.fn(),
@@ -43,7 +43,7 @@ vi.mock('../../../src/python-env.js', () => ({
 }));
 
 vi.mock('../../../src/config.js', () => ({
-  getConfig: vi.fn(() => ({ dataDir: '/tmp/test-wigolo' })),
+  getConfig: vi.fn(() => ({ dataDir: '/tmp/test-wigolo', searchBackend: null, searxngUrl: null })),
 }));
 
 const rerankMock = vi.fn().mockResolvedValue([{ id: '0', score: 0.5 }]);
@@ -65,10 +65,17 @@ vi.mock('../../../src/embedding/fastembed-provider.js', () => {
 });
 
 import { existsSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { runCommand } from '../../../src/cli/tui/run-command.js';
-import { runWarmup } from '../../../src/cli/warmup.js';
+import { runWarmup, installBrowser, installEmbeddings, wipeSearxngState } from '../../../src/cli/warmup.js';
 import { checkPythonAvailable, bootstrapNativeSearxng, getBootstrapState } from '../../../src/searxng/bootstrap.js';
 import { checkVenvModule } from '../../../src/python-env.js';
+import { getConfig } from '../../../src/config.js';
+
+// D1: the searxng phase now only runs when the sidecar is opted into
+// (--searxng, or --all with a searxng/hybrid backend or external URL). The
+// core-backend default runs browser + models only. Tests that exercise the
+// searxng-phase machinery therefore pass --searxng explicitly.
 
 const ok = { code: 0, stdout: '', stderr: '', timedOut: false };
 const failWith = (msg: string) => ({ code: 1, stdout: '', stderr: msg, timedOut: false });
@@ -77,11 +84,15 @@ const argsOf = (call: unknown[]): string[] => (call[1] as string[]) ?? [];
 const includesArg = (call: unknown[], needle: string): boolean =>
   argsOf(call).some((a) => String(a).includes(needle));
 
+const coreConfig = { dataDir: '/tmp/test-wigolo', searchBackend: null, searxngUrl: null };
+
 describe('runWarmup', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(runCommand).mockResolvedValue(ok);
     vi.mocked(checkVenvModule).mockReturnValue({ available: true });
+    // Restore the core-backend default; individual tests opt into searxng.
+    vi.mocked(getConfig).mockReturnValue(coreConfig as never);
   });
 
   it('installs chromium via the bundled Playwright CLI, not bare npx', async () => {
@@ -138,47 +149,47 @@ describe('runWarmup', () => {
     expect(result.playwright).toBe('ok');
   });
 
-  it('reports searxng already ready', async () => {
+  it('reports searxng already ready (with --searxng)', async () => {
     vi.mocked(getBootstrapState).mockReturnValue({ status: 'ready', searxngPath: '/tmp/searxng' });
 
-    const result = await runWarmup();
+    const result = await runWarmup(['--searxng']);
 
     expect(result.searxng).toBe('ready');
     expect(bootstrapNativeSearxng).not.toHaveBeenCalled();
   });
 
-  it('bootstraps searxng when python available and not ready', async () => {
+  it('bootstraps searxng when python available and not ready (with --searxng)', async () => {
     vi.mocked(getBootstrapState).mockReturnValue(null);
     vi.mocked(checkPythonAvailable).mockReturnValue(true);
     vi.mocked(bootstrapNativeSearxng).mockResolvedValue(undefined);
 
-    const result = await runWarmup();
+    const result = await runWarmup(['--searxng']);
 
     expect(bootstrapNativeSearxng).toHaveBeenCalledWith('/tmp/test-wigolo');
     expect(result.searxng).toBe('bootstrapped');
   });
 
-  it('reports searxng bootstrap failure', async () => {
+  it('reports searxng bootstrap failure (with --searxng)', async () => {
     vi.mocked(getBootstrapState).mockReturnValue(null);
     vi.mocked(checkPythonAvailable).mockReturnValue(true);
     vi.mocked(bootstrapNativeSearxng).mockRejectedValue(new Error('pip failed'));
 
-    const result = await runWarmup();
+    const result = await runWarmup(['--searxng']);
 
     expect(result.searxng).toBe('failed');
     expect(result.searxngError).toBe('pip failed');
   });
 
-  it('reports no python available', async () => {
+  it('reports no python available (with --searxng)', async () => {
     vi.mocked(getBootstrapState).mockReturnValue(null);
     vi.mocked(checkPythonAvailable).mockReturnValue(false);
 
-    const result = await runWarmup();
+    const result = await runWarmup(['--searxng']);
 
     expect(result.searxng).toBe('no_python');
   });
 
-  it('falls back to core with an actionable apt hint when python3-venv is missing', async () => {
+  it('falls back to core with an actionable apt hint when python3-venv is missing (with --searxng)', async () => {
     // WHY: Debian/Ubuntu ship python3 without the python3-venv package, so the
     // old behavior bootstrapped, failed with a cryptic ensurepip error, and
     // left search "failed". Warmup must instead recognize the missing module,
@@ -187,7 +198,7 @@ describe('runWarmup', () => {
     vi.mocked(checkPythonAvailable).mockReturnValue(true);
     vi.mocked(checkVenvModule).mockReturnValue({ available: false, pythonVersion: '3.12' });
 
-    const result = await runWarmup();
+    const result = await runWarmup(['--searxng']);
 
     expect(bootstrapNativeSearxng).not.toHaveBeenCalled();
     expect(result.searxng).toBe('no_venv');
@@ -195,11 +206,84 @@ describe('runWarmup', () => {
     expect(result.searxngError).toContain('core backend');
   });
 
+  it('--searxng triggers the searxng phase explicitly even on a core backend', async () => {
+    // WHY (D1): --searxng is the explicit opt-in trigger — a user who wants the
+    // sidecar can install it without changing WIGOLO_SEARCH.
+    vi.mocked(getConfig).mockReturnValue({ dataDir: '/tmp/test-wigolo', searchBackend: null, searxngUrl: null } as never);
+    vi.mocked(getBootstrapState).mockReturnValue({ status: 'ready', searxngPath: '/tmp/searxng' });
+
+    const result = await runWarmup(['--searxng']);
+
+    expect(result.searxng).toBe('ready');
+  });
+
+  it('default run on a core backend SKIPS the searxng phase (no probe, no bootstrap)', async () => {
+    // WHY (D1): a zero-config user running `wigolo warmup` must get browser +
+    // models only — never a Python sidecar bootstrap.
+    vi.mocked(getConfig).mockReturnValue({ dataDir: '/tmp/test-wigolo', searchBackend: null, searxngUrl: null } as never);
+    vi.mocked(getBootstrapState).mockReturnValue(null);
+    vi.mocked(checkPythonAvailable).mockReturnValue(true);
+
+    const result = await runWarmup();
+
+    expect(result.searxng).toBe('skipped');
+    expect(bootstrapNativeSearxng).not.toHaveBeenCalled();
+    expect(getBootstrapState).not.toHaveBeenCalled();
+    expect(checkPythonAvailable).not.toHaveBeenCalled();
+    expect(result.playwright).toBe('ok');
+  });
+
+  it('--all on a core backend installs browser + models but SKIPS searxng', async () => {
+    // WHY (D1): --all must not install the sidecar for a core user — it kills
+    // the D1↔D8 hint contradiction (init/warmup no longer promise the sidecar).
+    vi.mocked(getConfig).mockReturnValue({ dataDir: '/tmp/test-wigolo', searchBackend: null, searxngUrl: null } as never);
+    vi.mocked(getBootstrapState).mockReturnValue(null);
+    vi.mocked(checkPythonAvailable).mockReturnValue(true);
+
+    const result = await runWarmup(['--all']);
+
+    expect(result.searxng).toBe('skipped');
+    expect(bootstrapNativeSearxng).not.toHaveBeenCalled();
+    expect(result.reranker).toBe('ok');
+    expect(result.embeddings).toBe('ok');
+  });
+
+  it('--all with a searxng backend DOES run the searxng phase', async () => {
+    vi.mocked(getConfig).mockReturnValue({ dataDir: '/tmp/test-wigolo', searchBackend: 'searxng', searxngUrl: null } as never);
+    vi.mocked(getBootstrapState).mockReturnValue({ status: 'ready', searxngPath: '/tmp/searxng' });
+
+    const result = await runWarmup(['--all']);
+
+    expect(result.searxng).toBe('ready');
+  });
+
+  it('--all with an external searxngUrl DOES run the searxng phase', async () => {
+    vi.mocked(getConfig).mockReturnValue({ dataDir: '/tmp/test-wigolo', searchBackend: null, searxngUrl: 'http://sx.local:8888' } as never);
+    vi.mocked(getBootstrapState).mockReturnValue({ status: 'ready', searxngPath: '/tmp/searxng' });
+
+    const result = await runWarmup(['--all']);
+
+    expect(result.searxng).toBe('ready');
+  });
+
+  it('--all --no-searxng with a searxng backend SKIPS searxng (active suppressor wins)', async () => {
+    // WHY (D1): --no-searxng is an ACTIVE suppressor and must beat --all even
+    // when the sidecar is configured — preserves today's skip combo.
+    vi.mocked(getConfig).mockReturnValue({ dataDir: '/tmp/test-wigolo', searchBackend: 'searxng', searxngUrl: null } as never);
+    vi.mocked(getBootstrapState).mockReturnValue({ status: 'ready', searxngPath: '/tmp/searxng' });
+
+    const result = await runWarmup(['--all', '--no-searxng']);
+
+    expect(result.searxng).toBe('skipped');
+    expect(bootstrapNativeSearxng).not.toHaveBeenCalled();
+    expect(getBootstrapState).not.toHaveBeenCalled();
+  });
+
   it('--no-searxng skips the searxng phase entirely (real toggle teeth)', async () => {
     vi.mocked(getBootstrapState).mockReturnValue(null);
     vi.mocked(checkPythonAvailable).mockReturnValue(true);
 
-    const result = await runWarmup(['--no-searxng']);
+    const result = await runWarmup(['--searxng', '--no-searxng']);
 
     // Bootstrap must NOT run, and chromium (required) still installs.
     expect(bootstrapNativeSearxng).not.toHaveBeenCalled();
@@ -211,10 +295,27 @@ describe('runWarmup', () => {
     vi.mocked(getBootstrapState).mockReturnValue(null);
     vi.mocked(checkPythonAvailable).mockReturnValue(true);
 
-    await runWarmup(['--no-searxng']);
+    await runWarmup(['--searxng', '--no-searxng']);
 
     expect(getBootstrapState).not.toHaveBeenCalled();
     expect(checkPythonAvailable).not.toHaveBeenCalled();
+  });
+
+  it('--browser runs only the chromium phase (no searxng, no reranker, no embeddings)', async () => {
+    // WHY (D3/D9): the browser-install error text names `wigolo warmup
+    // --browser`, so the flag must actually exist and run the chromium phase in
+    // isolation.
+    vi.mocked(getConfig).mockReturnValue({ dataDir: '/tmp/test-wigolo', searchBackend: null, searxngUrl: null } as never);
+    vi.mocked(getBootstrapState).mockReturnValue(null);
+    vi.mocked(checkPythonAvailable).mockReturnValue(true);
+
+    const result = await runWarmup(['--browser']);
+
+    expect(result.playwright).toBe('ok');
+    expect(result.searxng).toBe('skipped');
+    expect(bootstrapNativeSearxng).not.toHaveBeenCalled();
+    expect(result.reranker).toBeUndefined();
+    expect(result.embeddings).toBeUndefined();
   });
 });
 
@@ -233,6 +334,7 @@ describe('runWarmup with flags', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(runCommand).mockResolvedValue(ok);
+    vi.mocked(getConfig).mockReturnValue(coreConfig as never);
     mockFetchNoop();
   });
 
@@ -242,7 +344,8 @@ describe('runWarmup with flags', () => {
     const result = await runWarmup([]);
 
     expect(result.playwright).toBe('ok');
-    expect(result.searxng).toBe('ready');
+    // Core-backend default (D1): the searxng phase is skipped.
+    expect(result.searxng).toBe('skipped');
   });
 
   it('accepts no arguments (backward compatible)', async () => {
@@ -255,10 +358,89 @@ describe('runWarmup with flags', () => {
 
 });
 
+describe('warmup --json (S9)', () => {
+  // WHY (D8): warmup already returns a structured WarmupResult; --json
+  // serializes it to stdout so a CI/agent can machine-read the outcome while
+  // the progress lines stay on stderr.
+  let stdoutSpy: ReturnType<typeof vi.spyOn>;
+  let stdoutBuf = '';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(runCommand).mockResolvedValue(ok);
+    vi.mocked(getConfig).mockReturnValue(coreConfig as never);
+    vi.mocked(getBootstrapState).mockReturnValue({ status: 'ready', searxngPath: '/tmp/searxng' });
+    vi.mocked(existsSync).mockReturnValue(true);
+    stdoutBuf = '';
+    stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      stdoutBuf += String(chunk);
+      return true;
+    });
+  });
+
+  afterEach(() => {
+    stdoutSpy.mockRestore();
+  });
+
+  it('emits the WarmupResult as a single JSON object on stdout', async () => {
+    const result = await runWarmup(['--json']);
+    const parsed = JSON.parse(stdoutBuf);
+    expect(parsed.playwright).toBe(result.playwright);
+    expect(parsed.searxng).toBe(result.searxng);
+    expect(parsed).toHaveProperty('playwright');
+    expect(parsed).toHaveProperty('searxng');
+  });
+
+  it('still returns the structured WarmupResult from the function', async () => {
+    const result = await runWarmup(['--json']);
+    expect(result.playwright).toBe('ok');
+    expect(result.searxng).toBe('skipped');
+  });
+});
+
+describe('exported repair functions (S9 — reused by doctor --fix)', () => {
+  // WHY (D9): doctor --fix invokes the same repair primitives warmup uses, but
+  // it must be able to call them WITHOUT wiring a full WarmupReporter. The three
+  // functions are exported and decoupled from the reporter via a no-op default,
+  // so a caller that only wants the effect (not the progress lines) can invoke
+  // them bare. runWarmup keeps passing its real reporter — behavior unchanged.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(runCommand).mockResolvedValue(ok);
+    vi.mocked(getConfig).mockReturnValue(coreConfig as never);
+  });
+
+  it('installBrowser is exported and runs without a reporter', async () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+    const r = await installBrowser('chromium');
+    expect(r.ok).toBe(true);
+    const [cmd, args] = vi.mocked(runCommand).mock.calls[0] as [string, string[], unknown];
+    expect(cmd).toBe(process.execPath);
+    expect(args).toContain('install');
+    expect(args).toContain('chromium');
+  });
+
+  it('installEmbeddings is exported and runs without a reporter', async () => {
+    const r = await installEmbeddings();
+    expect(r.embeddings).toBe('ok');
+  });
+
+  it('wipeSearxngState is exported and runs without a reporter', () => {
+    vi.mocked(existsSync).mockReturnValue(false);
+    // No throw, and it deletes the state/install/lock paths.
+    expect(() => wipeSearxngState('/tmp/test-wigolo')).not.toThrow();
+    const removed = vi.mocked(rmSync).mock.calls.map((c) => String(c[0]));
+    expect(removed.some((p) => p.endsWith('state.json'))).toBe(true);
+    expect(removed.some((p) => p.endsWith('searxng.lock'))).toBe(true);
+    expect(removed.some((p) => p.endsWith('searxng.port'))).toBe(true);
+  });
+});
+
 describe('warmup --reranker', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(runCommand).mockResolvedValue(ok);
+    vi.mocked(getConfig).mockReturnValue(coreConfig as never);
     vi.mocked(getBootstrapState).mockReturnValue({ status: 'ready', searxngPath: '/tmp/searxng' });
     rerankMock.mockResolvedValue([{ id: '0', score: 0.5 }]);
   });

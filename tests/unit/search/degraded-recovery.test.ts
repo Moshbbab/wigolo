@@ -168,6 +168,45 @@ describe('degraded-dispatch recovery wave', () => {
     expect(healthy).toBeGreaterThanOrEqual(2);
   });
 
+  it('degraded pool with a weak zero-lexical top is NOT normalised to 1.0 (gate d), recall preserved', async () => {
+    // Gate (d) at the orchestrator seam: a degraded pool (1 of 3 healthy) whose
+    // lone survivor returns a zero-lexical result must NOT have that result
+    // stretched to relevance_score 1.0 by max-normalisation — that is the
+    // live-incident ~1.0 mechanism. The orchestrator still RETURNS the result
+    // (recall preserved here); the downstream core-provider floor is what
+    // empties a purely-zero-lexical degraded pool. Proves the guard damps the
+    // score without dropping recall at this layer.
+    const survivor = healthyEntry('bing', [
+      makeResult('bing', 'https://junk.example/jp'),
+    ]);
+    const ddgEmpty = emptyEntry('ddg');
+    const wikiEmpty = emptyEntry('wikipedia');
+    verticalState.general = [survivor, ddgEmpty, wikiEmpty];
+
+    // Query shares NO token with the result's synthetic title/snippet.
+    const out = await runV1Search({ query: 'kubernetes ingress controller', maxResults: 10 });
+    const junk = out.results.find((r) => r.url === 'https://junk.example/jp');
+    expect(junk).toBeDefined();
+    // Not manufactured into a 1.0 evidence score on the degraded pool.
+    expect(junk!.relevance_score).toBeLessThan(1);
+  });
+
+  it('degraded reasons enum: a degraded pool surfaces reason strings (recovery path)', async () => {
+    // The pool_degraded.reasons enum is an open string[]; the degraded-recovery
+    // wave contributes 'degraded_recovery'. (The downstream core-provider floor
+    // adds 'no_lexical_match' for a purely-zero-lexical degraded pool — asserted
+    // in the search-rerank-fold integration fixture, since the floor lives at
+    // that seam, not in the orchestrator.)
+    const bing = healthyEntry('bing', [makeResult('bing', 'https://only.com/1')]);
+    const ddgEmpty = emptyEntry('ddg');
+    const wikiEmpty = emptyEntry('wikipedia');
+    const probe = probeOnlyEntry('mojeek', [makeResult('mojeek', 'https://recovered.com/1')]);
+    verticalState.general = [bing, ddgEmpty, wikiEmpty, probe];
+
+    const out = await runV1Search({ query: 'starved reasons query', maxResults: 10 });
+    expect(out.pool_degraded?.reasons).toContain('degraded_recovery');
+  });
+
   it('does NOT re-dispatch good results away when the primary pool is healthy but thin on count', async () => {
     // NEGATIVE: two of two primary engines return results (healthy = 2/2 =
     // 100%). Even though max_results is high, the pool is NOT degraded, so no

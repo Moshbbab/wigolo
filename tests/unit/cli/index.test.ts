@@ -87,6 +87,51 @@ describe('parseCommand', () => {
   });
 });
 
+describe('parseCommand — one-shot tools', () => {
+  const tools = [
+    'search',
+    'fetch',
+    'crawl',
+    'extract',
+    'cache',
+    'find-similar',
+    'research',
+    'agent',
+    'diff',
+    'watch',
+  ] as const;
+
+  for (const t of tools) {
+    it(`routes "${t}" to command=${t} with remaining args`, () => {
+      const parsed = parseCommand([t, 'foo', '--json']);
+      expect(parsed.command).toBe(t);
+      expect(parsed.args).toEqual(['foo', '--json']);
+    });
+  }
+
+  it('routes the snake-case "find_similar" alias', () => {
+    const parsed = parseCommand(['find_similar', 'https://x.com']);
+    expect(parsed.command).toBe('find_similar');
+    expect(parsed.args).toEqual(['https://x.com']);
+  });
+
+  it('preserves multi-word query positionals in args', () => {
+    const parsed = parseCommand(['search', 'react', 'hooks', '--limit=5']);
+    expect(parsed.command).toBe('search');
+    expect(parsed.args).toEqual(['react', 'hooks', '--limit=5']);
+  });
+
+  it('routes "watch add <url>" preserving the subcommand + url', () => {
+    const parsed = parseCommand(['watch', 'add', 'https://x.com', '--interval', '120']);
+    expect(parsed.command).toBe('watch');
+    expect(parsed.args).toEqual(['add', 'https://x.com', '--interval', '120']);
+  });
+
+  it('still defaults bare invocation to mcp', () => {
+    expect(parseCommand([])).toEqual({ command: 'mcp', args: [] });
+  });
+});
+
 describe('parseCommand — setup', () => {
   it('parses "setup mcp" into command=setup, args=[mcp]', () => {
     const parsed = parseCommand(['setup', 'mcp']);

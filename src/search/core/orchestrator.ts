@@ -111,6 +111,16 @@ function poolHealthFloor(dispatchedCount: number): number {
 // Undated results on a recency-bound query are kept but demoted so dated,
 // in-window pages win the top slots without collapsing recall.
 const UNDATED_DEMOTION = 0.3;
+// Absolute pre-normalisation confidence floor for the degraded-pool
+// normalisation guard (gate d). Max-normalisation divides every score by the
+// top score, so a single-junk degraded pool's top result becomes 1.0 BY
+// CONSTRUCTION — the live-incident ~1.0 mechanism. When the pool is degraded
+// AND the top pre-normalised final is below this floor, the stretch is skipped
+// so a low-confidence junk survivor is not manufactured into a 1.0 evidence
+// score. Measured against real RRF×lexical scores: a lexically-strong survivor
+// scores ~0.3 (still stretched), a zero-lexical junk survivor ~0.006 (not
+// stretched). Healthy pools always normalise regardless of score.
+const RANK_DEGRADED_CONFIDENCE_FLOOR = 0.05;
 
 // Wrap every error/status-code token in the query in double quotes in place so
 // engines treat the code as one atom (substring matching on an unquoted code
@@ -705,9 +715,34 @@ export async function runV1Search(
   const maxResults = requestedMax;
   let results = merged.slice(0, maxResults);
 
+  // Pool COLLAPSE signal (distinct from a benign starvation backfill):
+  // the primary wave left fewer than half the dispatched engines healthy — the
+  // burst-collapse shape of the live incident, where the pool fell to one
+  // degraded survivor. This is the ONLY degradation that triggers the
+  // downstream zero-lexical junk-floor gates; a thin-vertical starvation
+  // re-dispatch (which recovered genuine recall) must NOT. Surfaced as a
+  // dedicated reason so the core-provider floor can gate on it precisely.
+  const poolCollapsed =
+    outcomes.length > 0 && primaryHealthy < poolHealthFloor(outcomes.length);
+  if (poolCollapsed) {
+    const reasons = poolDegraded?.reasons ?? [];
+    poolDegraded = {
+      healthy: poolDegraded?.healthy ?? primaryHealthy,
+      total: poolDegraded?.total ?? outcomes.length,
+      degraded: true,
+      reasons: reasons.includes('pool_collapsed') ? reasons : [...reasons, 'pool_collapsed'],
+    };
+  }
   if (results.length > 0) {
     const maxFinal = Math.max(...results.map((r) => r.relevance_score));
-    if (maxFinal > 0) {
+    // Skip the stretch-to-1.0 only on a COLLAPSED pool whose top pre-normalised
+    // score is below the confidence floor: normalising there would manufacture a
+    // ~1.0 evidence score on a low-confidence junk survivor (the live incident).
+    // A benign starvation-redispatch degrade still normalises — it recovered
+    // real recall and its results must not be starved below the score floor. A
+    // healthy pool, or a confident-collapsed top, also still normalises.
+    const skipStretch = poolCollapsed && maxFinal < RANK_DEGRADED_CONFIDENCE_FLOOR;
+    if (maxFinal > 0 && !skipStretch) {
       results = results.map((r) => ({ ...r, relevance_score: r.relevance_score / maxFinal }));
     }
   }

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { resetConfig } from '../../../src/config.js';
+import { resolveSearchBackend, getBootstrapState } from '../../../src/searxng/bootstrap.js';
 
 vi.mock('../../../src/cache/db.js', () => ({
   initDatabase: vi.fn(),
@@ -76,6 +77,41 @@ describe('DaemonHttpServer', () => {
     const { DaemonHttpServer } = await import('../../../src/daemon/http-server.js');
     const daemon = new DaemonHttpServer({ port: 4444, host: '127.0.0.1' });
     expect(daemon).toBeDefined();
+  });
+
+  it('start() performs ZERO sidecar activity on the default core backend', async () => {
+    // WHY (D1): the daemon must honor the same zero-config gate as stdio mode.
+    // A default `core` daemon must not resolve/probe/install the sidecar.
+    delete process.env.WIGOLO_SEARCH;
+    resetConfig();
+    const { DaemonHttpServer } = await import('../../../src/daemon/http-server.js');
+    const daemon = new DaemonHttpServer({ port: 0, host: '127.0.0.1' });
+    try {
+      await daemon.start();
+      // bootstrapSearxng runs detached via .catch(); let its microtask settle.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(resolveSearchBackend).not.toHaveBeenCalled();
+    } finally {
+      await daemon.stop();
+    }
+  });
+
+  it('start() DOES resolve the backend when WIGOLO_SEARCH=searxng and the sidecar is installed (positive control)', async () => {
+    process.env.WIGOLO_SEARCH = 'searxng';
+    resetConfig();
+    vi.mocked(getBootstrapState).mockReturnValue({ status: 'ready', searxngPath: '/tmp/searxng' });
+    const { DaemonHttpServer } = await import('../../../src/daemon/http-server.js');
+    const daemon = new DaemonHttpServer({ port: 0, host: '127.0.0.1' });
+    try {
+      await daemon.start();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(resolveSearchBackend).toHaveBeenCalled();
+    } finally {
+      await daemon.stop();
+      delete process.env.WIGOLO_SEARCH;
+      vi.mocked(getBootstrapState).mockReturnValue(null);
+      resetConfig();
+    }
   });
 
   it('start() returns the listening URL', async () => {

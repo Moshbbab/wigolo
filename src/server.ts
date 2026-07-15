@@ -30,7 +30,8 @@ import type { SamplingCapableServer } from './search/sampling.js';
 import { SearxngClient } from './search/searxng.js';
 import { DuckDuckGoEngine } from './search/engines/duckduckgo.js';
 import { BingEngine } from './search/engines/bing.js';
-import { resolveSearchBackend, bootstrapNativeSearxng, getBootstrapState } from './searxng/bootstrap.js';
+import { resolveSearchBackend, getBootstrapState } from './searxng/bootstrap.js';
+import { searxngConfigured, searxngBackendAvailable } from './searxng/enabled.js';
 import { SearxngProcess } from './searxng/process.js';
 import { DockerSearxng } from './searxng/docker.js';
 import { BackendStatus } from './server/backend-status.js';
@@ -151,6 +152,28 @@ export async function initSubsystems(): Promise<Subsystems> {
   let searxngBootstrap: Promise<void> | null = null;
 
   async function bootstrapSearxng(): Promise<void> {
+    // D1: the search-engine sidecar is opt-in. On the default core backend with
+    // no external URL we do ZERO sidecar activity — no backend resolution (which
+    // both probes runtimes and writes state files), no port probe, no process.
+    if (!searxngConfigured(config)) {
+      return;
+    }
+
+    // Configured (searxng/hybrid backend or external URL) but resolution never
+    // installs implicitly. When no usable endpoint exists yet, tell the user how
+    // to opt into the install rather than downloading behind their back.
+    if (!searxngBackendAvailable(config)) {
+      backendStatus.markUnhealthy(
+        'search engine sidecar not installed — set WIGOLO_SEARXNG_URL to point at an ' +
+        'external instance, or run `wigolo warmup --searxng` to install it',
+      );
+      log.warn(
+        'search engine sidecar configured but not installed; using fallback engines. ' +
+        'Set WIGOLO_SEARXNG_URL or run `wigolo warmup --searxng`',
+      );
+      return;
+    }
+
     try {
       const initialState = getBootstrapState(config.dataDir);
       if (!config.searxngUrl && initialState?.status !== 'ready') {
@@ -167,17 +190,9 @@ export async function initSubsystems(): Promise<Subsystems> {
       }
 
       if (backend.type === 'native' && backend.searxngPath) {
-        const state = getBootstrapState(config.dataDir);
-        if (state?.status !== 'ready') {
-          log.info('search engine not ready — bootstrapping in background; search uses fallback engines until ready');
-          try {
-            await bootstrapNativeSearxng(config.dataDir);
-          } catch (err) {
-            log.warn('search engine bootstrap failed, continuing with fallback scraping');
-            backendStatus.markUnhealthy(`bootstrap exception: ${String(err)}`);
-            return;
-          }
-        }
+        // We only reach here when the sidecar is already installed
+        // (searxngBackendAvailable gated this). The installer is never invoked
+        // implicitly — it lives behind `wigolo warmup --searxng`.
         const postBootstrapState = getBootstrapState(config.dataDir);
         if (postBootstrapState?.status === 'ready') {
           searxngProcess = new SearxngProcess(backend.searxngPath, config.dataDir, {

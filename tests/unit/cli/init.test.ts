@@ -262,21 +262,50 @@ describe('runInit', () => {
     }
   });
 
-  it('non-interactive path invokes runWarmup(["--all"]) exactly once (no double-call)', async () => {
+  it('non-interactive path does NOT run warmup by default (headless-first: zero downloads)', async () => {
+    // INVERTED (D8): mandatory warmup is gone. Components download on first use,
+    // so a default init must not pre-download anything. The interactive delegate
+    // must also not be reached on the non-interactive path.
     primeHappyPath();
     const cap = capture();
     try {
       await runInit(['--non-interactive', '--agents=cursor']);
-      expect(runWarmupMock).toHaveBeenCalledTimes(1);
-      expect(runWarmupMock.mock.calls[0]?.[0]).toEqual(['--all']);
-      // Interactive delegate must not be reached on the non-interactive path.
+      expect(runWarmupMock).not.toHaveBeenCalled();
       expect(runConfigMock).not.toHaveBeenCalled();
     } finally {
       cap.restore();
     }
   });
 
-  describe('interactive (Ink) path', () => {
+  it('non-interactive path with --warmup runs runWarmup(["--all"]) exactly once', async () => {
+    // --warmup is the opt-in back into pre-caching. When set, warmup runs once.
+    primeHappyPath();
+    const cap = capture();
+    try {
+      await runInit(['--non-interactive', '--agents=cursor', '--warmup']);
+      expect(runWarmupMock).toHaveBeenCalledTimes(1);
+      expect(runWarmupMock.mock.calls[0]?.[0]).toEqual(['--all']);
+      expect(runConfigMock).not.toHaveBeenCalled();
+    } finally {
+      cap.restore();
+    }
+  });
+
+  it('non-interactive path prints the components-on-first-use hint', async () => {
+    // Both paths tell the user how to pre-cache instead of silently deferring.
+    primeHappyPath();
+    const cap = capture();
+    try {
+      await runInit(['--non-interactive', '--agents=cursor']);
+      const all = cap.stdout.join('') + cap.stderr.join('');
+      expect(all).toMatch(/components download on first use/i);
+      expect(all).toMatch(/wigolo warmup --all/);
+    } finally {
+      cap.restore();
+    }
+  });
+
+  describe('default TTY path is plain (NOT Ink)', () => {
     let prevTTY: boolean | undefined;
     let prevCI: string | undefined;
     let prevGha: string | undefined;
@@ -299,15 +328,80 @@ describe('runInit', () => {
       if (prevGha === undefined) delete process.env.GITHUB_ACTIONS; else process.env.GITHUB_ACTIONS = prevGha;
     });
 
-    it('runs the wizard then warms up the full tool set exactly once', async () => {
+    it('default init on a TTY runs the plain path and never mounts Ink (no --force-wizard delegate)', async () => {
+      // INVERTED (D8): a bare TTY init used to mount the Ink wizard. Now the
+      // default is the plain path on TTY and non-TTY alike — Ink mounts ONLY
+      // under --wizard. So runConfig(['--force-wizard']) must NOT be called.
+      primeHappyPath();
+      selectAgentsMock.mockResolvedValue([]);
       const cap = capture();
       try {
         const code = await runInit([]);
         expect(code).toBe(0);
-        // Wizard delegate ran with --force-wizard.
+        expect(runConfigMock).not.toHaveBeenCalled();
+        // Plain path renders the banner + system check to stdout.
+        expect(cap.stdout.join('')).toContain('BANNER');
+      } finally {
+        cap.restore();
+      }
+    });
+
+    it('default init on a TTY does NOT run warmup (headless-first)', async () => {
+      primeHappyPath();
+      selectAgentsMock.mockResolvedValue([]);
+      const cap = capture();
+      try {
+        await runInit([]);
+        expect(runWarmupMock).not.toHaveBeenCalled();
+      } finally {
+        cap.restore();
+      }
+    });
+  });
+
+  describe('--wizard (Ink) path', () => {
+    let prevTTY: boolean | undefined;
+    let prevCI: string | undefined;
+    let prevGha: string | undefined;
+
+    beforeEach(() => {
+      prevTTY = process.stdout.isTTY;
+      prevCI = process.env.CI;
+      prevGha = process.env.GITHUB_ACTIONS;
+      Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+      delete process.env.CI;
+      delete process.env.GITHUB_ACTIONS;
+      runConfigMock.mockResolvedValue(0);
+      runWarmupMock.mockResolvedValue(undefined);
+      wasUninstalledMock.mockReturnValue(false);
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process.stdout, 'isTTY', { value: prevTTY, configurable: true });
+      if (prevCI === undefined) delete process.env.CI; else process.env.CI = prevCI;
+      if (prevGha === undefined) delete process.env.GITHUB_ACTIONS; else process.env.GITHUB_ACTIONS = prevGha;
+    });
+
+    it('--wizard mounts the Ink wizard via runConfig(["--force-wizard"]) and runs NO warmup by default', async () => {
+      const cap = capture();
+      try {
+        const code = await runInit(['--wizard']);
+        expect(code).toBe(0);
         expect(runConfigMock).toHaveBeenCalledTimes(1);
         expect(runConfigMock.mock.calls[0]?.[0]).toEqual(['--force-wizard']);
-        // Warmup ran once with the full --all set (parity with non-interactive).
+        // Headless-first: no mandatory warmup even on the wizard path.
+        expect(runWarmupMock).not.toHaveBeenCalled();
+      } finally {
+        cap.restore();
+      }
+    });
+
+    it('--wizard --warmup runs runWarmup(["--all"]) exactly once after the wizard', async () => {
+      const cap = capture();
+      try {
+        const code = await runInit(['--wizard', '--warmup']);
+        expect(code).toBe(0);
+        expect(runConfigMock).toHaveBeenCalledTimes(1);
         expect(runWarmupMock).toHaveBeenCalledTimes(1);
         expect(runWarmupMock.mock.calls[0]?.[0]).toEqual(['--all']);
       } finally {
@@ -315,11 +409,23 @@ describe('runInit', () => {
       }
     });
 
-    it('skips warmup and propagates the code when the wizard exits non-zero', async () => {
+    it('--wizard prints the components-on-first-use hint', async () => {
+      const cap = capture();
+      try {
+        await runInit(['--wizard']);
+        const all = cap.stdout.join('') + cap.stderr.join('');
+        expect(all).toMatch(/components download on first use/i);
+        expect(all).toMatch(/wigolo warmup --all/);
+      } finally {
+        cap.restore();
+      }
+    });
+
+    it('propagates the code when the wizard exits non-zero and skips warmup', async () => {
       runConfigMock.mockResolvedValue(1);
       const cap = capture();
       try {
-        const code = await runInit([]);
+        const code = await runInit(['--wizard', '--warmup']);
         expect(code).toBe(1);
         expect(runWarmupMock).not.toHaveBeenCalled();
       } finally {
@@ -327,11 +433,11 @@ describe('runInit', () => {
       }
     });
 
-    it('returns 1 and reports when warmup fails', async () => {
+    it('returns 1 and reports when --warmup warmup fails', async () => {
       runWarmupMock.mockRejectedValue(new Error('browser download blocked'));
       const cap = capture();
       try {
-        const code = await runInit([]);
+        const code = await runInit(['--wizard', '--warmup']);
         expect(code).toBe(1);
         expect(cap.stderr.join('')).toMatch(/browser download blocked/);
       } finally {
@@ -345,7 +451,7 @@ describe('runInit', () => {
       wasUninstalledMock.mockReturnValue(true);
       const cap = capture();
       try {
-        const code = await runInit([]);
+        const code = await runInit(['--wizard', '--warmup']);
         expect(code).toBe(0);
         expect(runConfigMock).toHaveBeenCalledTimes(1);
         expect(runWarmupMock).not.toHaveBeenCalled();

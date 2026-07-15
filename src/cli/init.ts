@@ -25,13 +25,28 @@ export async function maybePrintOllamaHint(print: (line: string) => void): Promi
 
 const KEYSTORE_PROVIDERS: readonly LLMProvider[] = ['anthropic', 'openai', 'gemini', 'groq'];
 
+/**
+ * One-line hint printed on BOTH init paths: components are acquired lazily on
+ * first use, so init downloads nothing by default. `--warmup` (or the named
+ * command) pre-caches them ahead of time.
+ */
+const PRECACHE_HINT =
+  'components download on first use — run `wigolo warmup --all` to pre-cache';
+
 const INIT_USAGE = [
   'Usage: wigolo init [options]',
   '',
-  'Alias for: wigolo config --force-wizard',
-  'Always launches the interactive setup wizard, then drops into the settings shell.',
+  'Sets up wigolo headlessly: detects and wires your agents, persists settings.',
+  'Components (browser engine, on-device models) download on first use — nothing',
+  'is pre-downloaded unless you pass --warmup.',
+  '',
+  'By default init uses the plain text flow. Pass --wizard to launch the',
+  'interactive setup wizard (requires a terminal).',
   '',
   'Options:',
+  '  --wizard                Launch the interactive setup wizard (Ink TUI)',
+  '  --warmup                Pre-cache all components now (browser + on-device models)',
+  '  --json                  Emit a machine-readable JSON summary on stdout',
   '  --non-interactive, -y   Skip interactive prompts (uses plain text flow)',
   '  --agents=<csv>          Comma-separated agent ids to auto-wire (optional; omit to set up the engine only and point any MCP client at wigolo yourself)',
   '  --skip-verify           Skip the post-install verify step',
@@ -68,33 +83,76 @@ export async function runInit(args: string[]): Promise<number> {
     process.env.CI === 'true' ||
     process.env.CI === '1' ||
     process.env.GITHUB_ACTIONS === 'true';
-  const useInk = !flags.plain && !flags.nonInteractive && isTTY && !isCI;
+  // Headless-first (D8): the plain path is the default on TTY and non-TTY alike.
+  // Ink mounts ONLY under an explicit --wizard flag (and never in --plain /
+  // --non-interactive / CI / non-TTY contexts, which can't host it).
+  const useInk = flags.wizard && !flags.plain && !flags.nonInteractive && isTTY && !isCI;
 
   if (useInk) {
-    // Surface the keyless local-LLM lever before the wizard takes over the
-    // terminal, so a user with a running Ollama server learns they can pick it
-    // in the upcoming LLM step. Hint only — never auto-enabled.
-    await maybePrintOllamaHint((line) => process.stderr.write(`${line}\n`));
+    return runInitWizard(flags);
+  }
 
-    // Delegate to runConfig with --force-wizard: same code path, no divergent logic.
-    // Don't forward --plain: this code path is reached only when useInk is true,
-    // which already requires !flags.plain.
-    const { runConfig } = await import('./config.js');
-    const configArgs = ['--force-wizard'];
-    const code = await runConfig(configArgs);
-    if (code !== 0) return code;
+  // Plain / non-interactive mode — use the existing text-based flow
+  return runInitPlain(flags);
+}
 
-    // If the user navigated to the uninstall screen and wiped wigolo mid-session,
-    // skip warmup entirely — reinstalling components after an intentional uninstall
-    // would recreate ~/.wigolo against the user's wishes.
-    const { wasUninstalled } = await import('./tui/state/uninstall-signal.js');
-    if (wasUninstalled()) return 0;
+/**
+ * Machine-readable init summary emitted under --json. `status` drives the
+ * exit code: 'ok' → 0, 'error' → non-zero.
+ */
+interface InitJsonSummary {
+  status: 'ok' | 'error';
+  path: 'plain' | 'wizard';
+  warmup: boolean;
+  agentsRegistered: string[];
+  configPersisted: boolean;
+  readyCount?: number;
+  total?: number;
+  requiredFailed?: boolean;
+  message?: string;
+}
 
-    // Parity with the non-interactive path: the Ink wizard configures agents and
-    // settings but installs no tools. Run the full warmup AFTER the Ink shell has
-    // unmounted (runConfig has returned) so warmup's own progress output owns the
-    // terminal cleanly rather than fighting the live Ink render. Same flag set
-    // (`--all`) as runInitPlain, so both paths leave wigolo fully set up.
+function emitInitJson(summary: InitJsonSummary): void {
+  process.stdout.write(`${JSON.stringify(summary)}\n`);
+}
+
+async function runInitWizard(flags: InitFlagsResolved): Promise<number> {
+  // Surface the keyless local-LLM lever before the wizard takes over the
+  // terminal, so a user with a running Ollama server learns they can pick it
+  // in the upcoming LLM step. Hint only — never auto-enabled.
+  await maybePrintOllamaHint((line) => process.stderr.write(`${line}\n`));
+
+  // Delegate to runConfig with --force-wizard: same code path, no divergent logic.
+  // Don't forward --plain: this code path is reached only when useInk is true,
+  // which already requires !flags.plain.
+  const { runConfig } = await import('./config.js');
+  const code = await runConfig(['--force-wizard']);
+  if (code !== 0) {
+    if (flags.json) {
+      emitInitJson({ status: 'error', path: 'wizard', warmup: false, agentsRegistered: [], configPersisted: false, message: 'wizard exited non-zero' });
+    }
+    return code;
+  }
+
+  // If the user navigated to the uninstall screen and wiped wigolo mid-session,
+  // skip warmup entirely — reinstalling components after an intentional uninstall
+  // would recreate ~/.wigolo against the user's wishes.
+  const { wasUninstalled } = await import('./tui/state/uninstall-signal.js');
+  if (wasUninstalled()) {
+    if (flags.json) {
+      emitInitJson({ status: 'ok', path: 'wizard', warmup: false, agentsRegistered: [], configPersisted: false, message: 'uninstalled mid-session' });
+    }
+    return 0;
+  }
+
+  // Pre-cache hint: components download on first use. Print on BOTH paths so a
+  // user always knows how to warm the cache ahead of time.
+  process.stderr.write(`${PRECACHE_HINT}\n`);
+
+  // Headless-first (D8): NO mandatory warmup. Only pre-cache when the user opts
+  // in with --warmup. Run it AFTER the Ink shell has unmounted (runConfig has
+  // returned) so warmup's own progress output owns the terminal cleanly.
+  if (flags.warmup) {
     const { runWarmup } = await import('./warmup.js');
     const { autoReporter } = await import('./tui/reporter-auto.js');
     const reporter = autoReporter({ command: 'init' });
@@ -103,13 +161,17 @@ export async function runInit(args: string[]): Promise<number> {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`Warmup failed: ${message}\n`);
+      if (flags.json) {
+        emitInitJson({ status: 'error', path: 'wizard', warmup: true, agentsRegistered: [], configPersisted: true, message });
+      }
       return 1;
     }
-    return 0;
   }
 
-  // Plain / non-interactive mode — use the existing text-based flow
-  return runInitPlain(flags);
+  if (flags.json) {
+    emitInitJson({ status: 'ok', path: 'wizard', warmup: flags.warmup, agentsRegistered: [], configPersisted: true });
+  }
+  return 0;
 }
 
 interface InitFlagsResolved {
@@ -118,6 +180,9 @@ interface InitFlagsResolved {
   skipVerify: boolean;
   plain: boolean;
   help: boolean;
+  wizard: boolean;
+  warmup: boolean;
+  json: boolean;
   provider?: string;
   search?: string;
 }
@@ -137,12 +202,16 @@ async function runInitPlain(flags: InitFlagsResolved): Promise<number> {
   const { saveInitConfig } = await import('./tui/utils/config-writer.js');
   type AgentId = import('./tui/agents.js').AgentId;
 
+  // Under --json, stdout is reserved for the single machine-readable summary
+  // object; all human report lines route to stderr so JSON stays parseable.
   function out(line = ''): void {
-    process.stdout.write(`${line}\n`);
+    if (flags.json) process.stderr.write(`${line}\n`);
+    else process.stdout.write(`${line}\n`);
   }
 
   const version = getPackageVersion();
-  process.stdout.write(renderBanner(version));
+  if (flags.json) process.stderr.write(renderBanner(version));
+  else process.stdout.write(renderBanner(version));
 
   const sysResult = await runSystemCheck();
 
@@ -173,20 +242,34 @@ async function runInitPlain(flags: InitFlagsResolved): Promise<number> {
   if (sysResult.hardFailure) {
     out();
     out(chalk.red.bold('  Setup cannot continue until the issues above are resolved.'));
+    if (flags.json) {
+      emitInitJson({ status: 'error', path: 'plain', warmup: false, agentsRegistered: [], configPersisted: false, message: 'system check hard failure' });
+    }
     return 1;
   }
   out();
   out(`  ${info('System check passed.')}`);
   out();
 
+  // Pre-cache hint: components download on first use. Print on BOTH paths.
+  process.stderr.write(`${PRECACHE_HINT}\n`);
+
   const reporter = autoReporter({ plain: flags.plain, command: 'init' });
 
-  try {
-    await runWarmup(['--all'], reporter);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`Warmup failed: ${message}\n`);
-    return 1;
+  // Headless-first (D8): NO mandatory warmup. Only pre-cache when --warmup is
+  // set. A default init downloads nothing — components are acquired lazily on
+  // first use.
+  if (flags.warmup) {
+    try {
+      await runWarmup(['--all'], reporter);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`Warmup failed: ${message}\n`);
+      if (flags.json) {
+        emitInitJson({ status: 'error', path: 'plain', warmup: true, agentsRegistered: [], configPersisted: false, message });
+      }
+      return 1;
+    }
   }
 
   let detected;
@@ -381,6 +464,19 @@ async function runInitPlain(flags: InitFlagsResolved): Promise<number> {
   const summary = summarizeSetup(statuses);
   out();
   for (const line of summary.lines) out(`  ${line}`);
+
+  if (flags.json) {
+    emitInitJson({
+      status: summary.exitCode === 0 ? 'ok' : 'error',
+      path: 'plain',
+      warmup: flags.warmup,
+      agentsRegistered: [...selected],
+      configPersisted: true,
+      readyCount: summary.readyCount,
+      total: summary.total,
+      requiredFailed: summary.requiredFailed,
+    });
+  }
   return summary.exitCode;
 }
 

@@ -205,15 +205,24 @@ describe('runInit --non-interactive', () => {
     expect(runWarmupMock).not.toHaveBeenCalled();
   });
 
-  it('--non-interactive with NO --agents sets up the engine only (no gatekeeping)', async () => {
+  it('--non-interactive with NO --agents sets up config only, no downloads (no gatekeeping)', async () => {
     // Marketing contract: wigolo works for ANY MCP-capable agent, so a user whose
-    // agent has no built-in installer (e.g. Hermes) must still install the engine
-    // headlessly. --agents is optional: warmup runs, agent wiring is skipped, exit 0.
+    // agent has no built-in installer (e.g. Hermes) must still complete init
+    // headlessly. --agents is optional: agent wiring is skipped, exit 0.
+    // INVERTED (D8): engine setup is now lazy — components download on first use,
+    // so a default init runs NO warmup. --warmup opts back in (covered below).
     const code = await runInit(['--non-interactive', '--skip-verify']);
     expect(code).toBe(0);
-    expect(runWarmupMock).toHaveBeenCalledTimes(1); // engine setup still happens
+    expect(runWarmupMock).not.toHaveBeenCalled(); // headless-first: no download
     expect(selectAgentsMock).not.toHaveBeenCalled(); // no interactive prompt
     expect(applyConfigsMock).not.toHaveBeenCalled(); // no agent wiring
+  });
+
+  it('--non-interactive --warmup runs runWarmup(["--all"]) exactly once (opt-in pre-cache)', async () => {
+    const code = await runInit(['--non-interactive', '--skip-verify', '--warmup']);
+    expect(code).toBe(0);
+    expect(runWarmupMock).toHaveBeenCalledTimes(1);
+    expect(runWarmupMock.mock.calls[0]?.[0]).toEqual(['--all']);
   });
 
   it('--non-interactive with no agents but --provider still persists the provider', async () => {

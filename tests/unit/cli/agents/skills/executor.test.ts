@@ -6,9 +6,12 @@ import {
   readFileSync,
   existsSync,
   readdirSync,
+  symlinkSync,
+  lstatSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 
 let tmpHome: string;
 let tmpData: string;
@@ -278,5 +281,320 @@ describe('listSkills', () => {
     writeCalls.length = 0;
     listSkills({ scope: 'global', agents: ['claude-code'], cwd: tmpCwd });
     expect(writeCalls).toEqual([]);
+  });
+
+  // F15 — list states never previously asserted.
+  it('reports adopted when canonical bytes sit with no receipt', async () => {
+    const { listSkills } = await loadExec();
+    const { loadPack } = await loadCat();
+    const pack = loadPack('wigolo-search');
+    const dir = join(tmpHome, '.claude', 'skills', 'wigolo-search');
+    mkdirSync(dir, { recursive: true });
+    for (const [rel, content] of Object.entries(pack.files)) {
+      const abs = join(dir, rel);
+      mkdirSync(join(abs, '..'), { recursive: true });
+      writeFileSync(abs, content, 'utf-8');
+    }
+    const list = listSkills({ scope: 'global', agents: ['claude-code'], packs: ['wigolo-search'], cwd: tmpCwd });
+    expect(list.find((e) => e.pack === 'wigolo-search')!.state).toBe('adopted');
+  });
+
+  it('reports stale when a receipt exists but the pack dir is gone', async () => {
+    const { planSkills } = await loadPlan();
+    const { applySkillsPlan, listSkills } = await loadExec();
+    applySkillsPlan(planSkills({ scope: 'global', agents: ['claude-code'], packs: ['wigolo'], cwd: tmpCwd }));
+    // Remove the pack dir on disk but leave the receipt.
+    rmSync(join(tmpHome, '.claude', 'skills', 'wigolo'), { recursive: true, force: true });
+    const list = listSkills({ scope: 'global', agents: ['claude-code'], packs: ['wigolo'], cwd: tmpCwd });
+    expect(list.find((e) => e.pack === 'wigolo')!.state).toBe('stale');
+  });
+
+  it('reports managed-externally when the pack dir is a symlink', async () => {
+    const { listSkills } = await loadExec();
+    const skillsBase = join(tmpHome, '.claude', 'skills');
+    mkdirSync(skillsBase, { recursive: true });
+    const external = join(tmpHome, 'external');
+    mkdirSync(external, { recursive: true });
+    symlinkSync(external, join(skillsBase, 'wigolo'));
+    const list = listSkills({ scope: 'global', agents: ['claude-code'], packs: ['wigolo'], cwd: tmpCwd });
+    expect(list.find((e) => e.pack === 'wigolo')!.state).toBe('managed-externally');
+  });
+
+  it('reports outdated when the receipt version drifts and canonical differs', async () => {
+    const { planSkills } = await loadPlan();
+    const { applySkillsPlan, listSkills } = await loadExec();
+    applySkillsPlan(planSkills({ scope: 'global', agents: ['claude-code'], packs: ['wigolo'], cwd: tmpCwd }));
+    // Rewrite the receipt with a bogus old version so version-drift trips, and
+    // edit an on-disk file to a byte state that still hash-matches the receipt
+    // but differs from canonical (simulate: point receipt hash at current disk,
+    // then tweak the on-disk bytes AND the receipt hash so onDisk===receipt but
+    // onDisk!==canonical). Simplest: set receipt version old + overwrite a file
+    // with content whose hash we also store in the receipt.
+    const rcptPath = join(tmpData, 'skills', 'receipts.json');
+    const store = JSON.parse(readFileSync(rcptPath, 'utf-8'));
+    const key = Object.keys(store)[0];
+    const drifted = 'drifted-but-tracked\n';
+    const driftedHash = createHash('sha256').update(drifted, 'utf-8').digest('hex');
+    store[key].packs.wigolo.version = '0.0.1-old';
+    store[key].packs.wigolo.files['SKILL.md'] = driftedHash;
+    writeFileSync(rcptPath, JSON.stringify(store), 'utf-8');
+    writeFileSync(join(tmpHome, '.claude', 'skills', 'wigolo', 'SKILL.md'), drifted, 'utf-8');
+    const list = listSkills({ scope: 'global', agents: ['claude-code'], packs: ['wigolo'], cwd: tmpCwd });
+    expect(list.find((e) => e.pack === 'wigolo')!.state).toBe('outdated');
+  });
+});
+
+// F1 — executor must never write through a symlink; force replaces the LINK.
+describe('applySkillsPlan — symlink write-path guard (F1)', () => {
+  it('force + symlinked pack dir replaces the link with a real dir; target tree untouched', async () => {
+    const { planSkills } = await loadPlan();
+    const { applySkillsPlan } = await loadExec();
+    const skillsBase = join(tmpHome, '.claude', 'skills');
+    mkdirSync(skillsBase, { recursive: true });
+    // The symlink target holds a sentinel that must survive.
+    const target = join(tmpHome, 'external-target');
+    mkdirSync(target, { recursive: true });
+    const sentinel = join(target, 'sentinel.txt');
+    writeFileSync(sentinel, 'do not touch', 'utf-8');
+    const packLink = join(skillsBase, 'wigolo');
+    symlinkSync(target, packLink);
+
+    const plan = planSkills({ scope: 'global', agents: ['claude-code'], packs: ['wigolo'], cwd: tmpCwd, force: true });
+    applySkillsPlan(plan);
+
+    // The link is gone; a real dir now sits there with the pack's SKILL.md.
+    expect(lstatSync(packLink).isSymbolicLink()).toBe(false);
+    expect(lstatSync(packLink).isDirectory()).toBe(true);
+    expect(existsSync(join(packLink, 'SKILL.md'))).toBe(true);
+    // The link TARGET tree is untouched.
+    expect(existsSync(sentinel)).toBe(true);
+    expect(readFileSync(sentinel, 'utf-8')).toBe('do not touch');
+  });
+
+  it('a symlink LEAF planted AFTER planning (TOCTOU) is refused; target untouched', async () => {
+    const { planSkills } = await loadPlan();
+    const { applySkillsPlan } = await loadExec();
+    // Plan on a clean fs — every file resolves to create.
+    const plan = planSkills({ scope: 'global', agents: ['claude-code'], packs: ['wigolo'], cwd: tmpCwd });
+
+    // Now plant a symlink where SKILL.md would be written.
+    const packDir = join(tmpHome, '.claude', 'skills', 'wigolo');
+    mkdirSync(packDir, { recursive: true });
+    const victim = join(tmpHome, 'victim.txt');
+    writeFileSync(victim, 'ORIGINAL', 'utf-8');
+    symlinkSync(victim, join(packDir, 'SKILL.md'));
+
+    const res = applySkillsPlan(plan);
+    // The write through the link was refused; victim content is intact.
+    expect(readFileSync(victim, 'utf-8')).toBe('ORIGINAL');
+    expect(lstatSync(join(packDir, 'SKILL.md')).isSymbolicLink()).toBe(true);
+    expect(res.refused.some((r) => /symlink appeared|TOCTOU|write through/i.test(r.reason ?? ''))).toBe(true);
+  });
+
+  it('force + symlinked owned windsurf project file replaces the link; target untouched', async () => {
+    const { planSkills } = await loadPlan();
+    const { applySkillsPlan } = await loadExec();
+    const rulesDir = join(tmpCwd, '.windsurf', 'rules');
+    mkdirSync(rulesDir, { recursive: true });
+    const target = join(tmpCwd, 'external-rules.md');
+    writeFileSync(target, 'USER RULES', 'utf-8');
+    const link = join(rulesDir, 'wigolo.md');
+    symlinkSync(target, link);
+
+    const plan = planSkills({ scope: 'project', agents: ['windsurf'], cwd: tmpCwd, force: true });
+    applySkillsPlan(plan);
+
+    expect(lstatSync(link).isSymbolicLink()).toBe(false);
+    expect(readFileSync(target, 'utf-8')).toBe('USER RULES'); // target untouched
+  });
+});
+
+// F2 — remove for a non-member agent must NOT delete shared files.
+describe('removeSkills — non-member removal is a no-op (F2)', () => {
+  it('receipt owned by codex; remove --agent cursor leaves files + receipt intact', async () => {
+    const { planSkills } = await loadPlan();
+    const { applySkillsPlan, removeSkills } = await loadExec();
+    // Install ONLY codex into the shared .agents/skills base.
+    applySkillsPlan(planSkills({ scope: 'project', agents: ['codex'], packs: ['wigolo'], cwd: tmpCwd }));
+    const skillMd = join(tmpCwd, '.agents', 'skills', 'wigolo', 'SKILL.md');
+    expect(existsSync(skillMd)).toBe(true);
+
+    const rcptPath = join(tmpData, 'skills', 'receipts.json');
+    const before = readFileSync(rcptPath, 'utf-8');
+
+    // Remove for cursor — NOT an owner of this path.
+    const res = removeSkills({ scope: 'project', agents: ['cursor'], packs: ['wigolo'], cwd: tmpCwd });
+
+    expect(existsSync(skillMd)).toBe(true); // files survive
+    expect(readFileSync(rcptPath, 'utf-8')).toBe(before); // receipt untouched
+    expect(res.removed).toEqual([]);
+    expect(res.notices.some((n) => /owned by: codex|not removed/i.test(n))).toBe(true);
+  });
+});
+
+// F3 — a per-pack remove must not strip the windsurf digest.
+describe('removeSkills — per-pack remove leaves windsurf digest (F3)', () => {
+  it('remove wigolo-search does NOT touch the windsurf project rules', async () => {
+    const { planSkills } = await loadPlan();
+    const { applySkillsPlan, removeSkills } = await loadExec();
+    applySkillsPlan(planSkills({ scope: 'project', agents: ['claude-code'], packs: ['wigolo-search'], cwd: tmpCwd }));
+    applySkillsPlan(planSkills({ scope: 'project', agents: ['windsurf'], cwd: tmpCwd }));
+    const rules = join(tmpCwd, '.windsurf', 'rules', 'wigolo.md');
+    expect(existsSync(rules)).toBe(true);
+
+    removeSkills({ scope: 'project', agents: ['claude-code', 'windsurf'], packs: ['wigolo-search'], cwd: tmpCwd });
+    expect(existsSync(rules)).toBe(true); // digest untouched
+  });
+
+  it('remove with NO packs (all) DOES strip the windsurf digest', async () => {
+    const { planSkills } = await loadPlan();
+    const { applySkillsPlan, removeSkills } = await loadExec();
+    applySkillsPlan(planSkills({ scope: 'project', agents: ['windsurf'], cwd: tmpCwd }));
+    const rules = join(tmpCwd, '.windsurf', 'rules', 'wigolo.md');
+    expect(existsSync(rules)).toBe(true);
+
+    removeSkills({ scope: 'project', agents: ['windsurf'], cwd: tmpCwd });
+    expect(existsSync(rules)).toBe(false);
+  });
+});
+
+// F4 — windsurf-global list state.
+describe('listSkills — windsurf global (F4)', () => {
+  it('fresh windsurf global install with a user preamble lists installed (not modified)', async () => {
+    const { planSkills } = await loadPlan();
+    const { applySkillsPlan, listSkills } = await loadExec();
+    const dir = join(tmpHome, '.codeium', 'windsurf', 'memories');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'global_rules.md'), '# my rules\nkeep this\n', 'utf-8');
+    applySkillsPlan(planSkills({ scope: 'global', agents: ['windsurf'], cwd: tmpCwd }));
+    const list = listSkills({ scope: 'global', agents: ['windsurf'], cwd: tmpCwd });
+    expect(list.find((e) => e.agent === 'windsurf')!.state).toBe('installed');
+  });
+
+  it('global_rules.md with NO wigolo block and no receipt lists absent (not adopted)', async () => {
+    const { listSkills } = await loadExec();
+    const dir = join(tmpHome, '.codeium', 'windsurf', 'memories');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'global_rules.md'), '# just my own rules\n', 'utf-8');
+    const list = listSkills({ scope: 'global', agents: ['windsurf'], cwd: tmpCwd });
+    expect(list.find((e) => e.agent === 'windsurf')!.state).toBe('absent');
+  });
+});
+
+// F6 — windsurf removal at the engine level.
+describe('removeSkills / removeAllSkills — windsurf removal (F6)', () => {
+  it('global block stripped; user preamble preserved; file kept', async () => {
+    const { planSkills } = await loadPlan();
+    const { applySkillsPlan, removeSkills } = await loadExec();
+    const dir = join(tmpHome, '.codeium', 'windsurf', 'memories');
+    mkdirSync(dir, { recursive: true });
+    const gr = join(dir, 'global_rules.md');
+    writeFileSync(gr, '# personal\nkeep me\n', 'utf-8');
+    applySkillsPlan(planSkills({ scope: 'global', agents: ['windsurf'], cwd: tmpCwd }));
+    expect(readFileSync(gr, 'utf-8')).toContain('<!-- wigolo:start');
+
+    removeSkills({ scope: 'global', agents: ['windsurf'], cwd: tmpCwd });
+    const after = readFileSync(gr, 'utf-8');
+    expect(after).not.toContain('<!-- wigolo:start');
+    expect(after).toContain('keep me'); // preamble survives
+  });
+
+  it('global block-only file is deleted when the block was its only content', async () => {
+    const { planSkills } = await loadPlan();
+    const { applySkillsPlan, removeSkills } = await loadExec();
+    applySkillsPlan(planSkills({ scope: 'global', agents: ['windsurf'], cwd: tmpCwd }));
+    const gr = join(tmpHome, '.codeium', 'windsurf', 'memories', 'global_rules.md');
+    expect(existsSync(gr)).toBe(true);
+    removeSkills({ scope: 'global', agents: ['windsurf'], cwd: tmpCwd });
+    expect(existsSync(gr)).toBe(false);
+  });
+
+  it('project owned file deleted on remove', async () => {
+    const { planSkills } = await loadPlan();
+    const { applySkillsPlan, removeSkills } = await loadExec();
+    applySkillsPlan(planSkills({ scope: 'project', agents: ['windsurf'], cwd: tmpCwd }));
+    const rules = join(tmpCwd, '.windsurf', 'rules', 'wigolo.md');
+    expect(existsSync(rules)).toBe(true);
+    removeSkills({ scope: 'project', agents: ['windsurf'], cwd: tmpCwd });
+    expect(existsSync(rules)).toBe(false);
+  });
+
+  it('user-modified project rules file is refused (no force)', async () => {
+    const { planSkills } = await loadPlan();
+    const { applySkillsPlan, removeSkills } = await loadExec();
+    applySkillsPlan(planSkills({ scope: 'project', agents: ['windsurf'], cwd: tmpCwd }));
+    const rules = join(tmpCwd, '.windsurf', 'rules', 'wigolo.md');
+    writeFileSync(rules, 'USER HAND EDIT', 'utf-8');
+    const res = removeSkills({ scope: 'project', agents: ['windsurf'], cwd: tmpCwd });
+    expect(existsSync(rules)).toBe(true);
+    expect(res.refused.some((r) => /user-modified/i.test(r.reason ?? ''))).toBe(true);
+  });
+});
+
+// F8 — engine-level remove dry-run.
+describe('planRemove — pure preview (F8)', () => {
+  function treeHash(dir: string): string {
+    const h = createHash('sha256');
+    const walk = (d: string) => {
+      if (!existsSync(d)) return;
+      for (const name of readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+        const full = join(d, name.name);
+        if (name.isDirectory()) { h.update(`D:${full}\n`); walk(full); }
+        else h.update(`F:${full}:${readFileSync(full, 'utf-8')}\n`);
+      }
+    };
+    walk(dir);
+    return h.digest('hex');
+  }
+
+  it('dry-run remove reports remove actions but mutates NOTHING', async () => {
+    const { planSkills } = await loadPlan();
+    const { applySkillsPlan, planRemove } = await loadExec();
+    applySkillsPlan(planSkills({ scope: 'global', agents: ['claude-code'], packs: ['wigolo'], cwd: tmpCwd }));
+    const beforeTree = treeHash(join(tmpHome, '.claude'));
+    const beforeRcpt = readFileSync(join(tmpData, 'skills', 'receipts.json'), 'utf-8');
+
+    const plan = planRemove({ scope: 'global', agents: ['claude-code'], packs: ['wigolo'], cwd: tmpCwd });
+    expect(plan.actions.some((a) => a.status === 'remove')).toBe(true);
+    expect(treeHash(join(tmpHome, '.claude'))).toBe(beforeTree);
+    expect(readFileSync(join(tmpData, 'skills', 'receipts.json'), 'utf-8')).toBe(beforeRcpt);
+  });
+
+  it('dry-run remove on a user-modified file shows refuse and touches nothing', async () => {
+    const { planSkills } = await loadPlan();
+    const { applySkillsPlan, planRemove } = await loadExec();
+    applySkillsPlan(planSkills({ scope: 'global', agents: ['claude-code'], packs: ['wigolo'], cwd: tmpCwd }));
+    const skillMd = join(tmpHome, '.claude', 'skills', 'wigolo', 'SKILL.md');
+    writeFileSync(skillMd, 'USER EDIT', 'utf-8');
+    const beforeTree = treeHash(join(tmpHome, '.claude'));
+
+    const plan = planRemove({ scope: 'global', agents: ['claude-code'], packs: ['wigolo'], cwd: tmpCwd });
+    expect(plan.actions.some((a) => a.status === 'refuse')).toBe(true);
+    expect(existsSync(skillMd)).toBe(true);
+    expect(treeHash(join(tmpHome, '.claude'))).toBe(beforeTree);
+  });
+});
+
+// F16 — adopted-flag persistence.
+describe('recordReceipt — adopted flag persists (F16)', () => {
+  it('an adopt apply writes adopted:true into the receipt entry', async () => {
+    const { planSkills } = await loadPlan();
+    const { applySkillsPlan } = await loadExec();
+    const { loadPack } = await loadCat();
+    const pack = loadPack('wigolo-search');
+    const dir = join(tmpHome, '.claude', 'skills', 'wigolo-search');
+    mkdirSync(dir, { recursive: true });
+    for (const [rel, content] of Object.entries(pack.files)) {
+      const abs = join(dir, rel);
+      mkdirSync(join(abs, '..'), { recursive: true });
+      writeFileSync(abs, content, 'utf-8');
+    }
+    applySkillsPlan(planSkills({ scope: 'global', agents: ['claude-code'], packs: ['wigolo-search'], cwd: tmpCwd }));
+    const store = JSON.parse(readFileSync(join(tmpData, 'skills', 'receipts.json'), 'utf-8'));
+    const entry = Object.values(store).find((e) => {
+      const packs = (e as { packs?: Record<string, unknown> }).packs;
+      return packs && 'wigolo-search' in packs;
+    }) as { adopted?: boolean };
+    expect(entry.adopted).toBe(true);
   });
 });

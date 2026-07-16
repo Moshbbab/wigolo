@@ -224,6 +224,48 @@ describe('full arc — install, list, remove', () => {
   });
 });
 
+describe('windsurf removal at the engine level (F6)', () => {
+  it('project+global install then removeSkills strips both', async () => {
+    const { installSkills, removeSkills } = await engine();
+    installSkills({ scope: 'project', agents: ['windsurf'], cwd: tmpCwd });
+    installSkills({ scope: 'global', agents: ['windsurf'], cwd: tmpCwd });
+    const projRules = join(tmpCwd, '.windsurf', 'rules', 'wigolo.md');
+    const globalRules = join(tmpHome, '.codeium', 'windsurf', 'memories', 'global_rules.md');
+    expect(existsSync(projRules)).toBe(true);
+    expect(existsSync(globalRules)).toBe(true);
+
+    removeSkills({ scope: 'project', agents: ['windsurf'], cwd: tmpCwd });
+    removeSkills({ scope: 'global', agents: ['windsurf'], cwd: tmpCwd });
+    // project owned file deleted; global block-only file deleted.
+    expect(existsSync(projRules)).toBe(false);
+    expect(existsSync(globalRules)).toBe(false);
+  });
+
+  it('global block stripped but file kept when the file has other content', async () => {
+    const { installSkills, removeSkills } = await engine();
+    const dir = join(tmpHome, '.codeium', 'windsurf', 'memories');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'global_rules.md'), '# mine\nkeep this line\n', 'utf-8');
+    installSkills({ scope: 'global', agents: ['windsurf'], cwd: tmpCwd });
+    removeSkills({ scope: 'global', agents: ['windsurf'], cwd: tmpCwd });
+    const gr = join(dir, 'global_rules.md');
+    expect(existsSync(gr)).toBe(true);
+    const content = readFileSync(gr, 'utf-8');
+    expect(content).toContain('keep this line');
+    expect(content).not.toContain('<!-- wigolo:start');
+  });
+
+  it('user-modified project rules file is refused (no force)', async () => {
+    const { installSkills, removeSkills } = await engine();
+    installSkills({ scope: 'project', agents: ['windsurf'], cwd: tmpCwd });
+    const projRules = join(tmpCwd, '.windsurf', 'rules', 'wigolo.md');
+    writeFileSync(projRules, 'USER EDIT', 'utf-8');
+    const res = removeSkills({ scope: 'project', agents: ['windsurf'], cwd: tmpCwd });
+    expect(existsSync(projRules)).toBe(true);
+    expect(res.refused.some((r) => /user-modified/i.test(r.reason ?? ''))).toBe(true);
+  });
+});
+
 describe('staggered-add per-pack version labeling', () => {
   it('two packs added in the same store share a receipt entry per base with per-pack versions', async () => {
     const { installSkills } = await engine();

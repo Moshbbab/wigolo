@@ -35,7 +35,15 @@ function groupTargetsByBase(targets: Target[]): Map<string, Target[]> {
   return byBase;
 }
 
-/** Aggregate per-file statuses into a single pack-dir status (worst-wins). */
+/**
+ * Aggregate per-file statuses into a single pack-dir status (worst-wins).
+ *
+ * Pack application is ATOMIC: one refused file makes the whole pack action
+ * 'refuse', and the executor skips the entire action (never a partial write).
+ * This is consistent with the engine's refuse-over-guess stance — force is the
+ * single escape hatch. (The executor therefore never sees a file-level 'refuse';
+ * its only per-file skip is a symlink planted AFTER planning — a TOCTOU guard.)
+ */
 function aggregateStatus(files: FileResolution[]): PlanStatus {
   const order: PlanStatus[] = ['unchanged', 'adopt', 'update', 'create', 'remove', 'refuse'];
   let worst: PlanStatus = 'unchanged';
@@ -69,7 +77,7 @@ function resolveFileAdd(
 
   if (entry.kind === 'symlink') {
     if (force) {
-      return { relPath, absPath, status: 'update', content: canonical, reason: 'force: replacing symlink' };
+      return { relPath, absPath, status: 'update', content: canonical, reason: 'force: replacing symlink', replaceSymlink: true };
     }
     return {
       relPath,
@@ -172,6 +180,11 @@ function planSkillDirsPack(
     }
   }
 
+  // A symlinked pack DIR under force: authorize replacing the LINK with a real
+  // dir. Files under it lstat as absent (the link resolves elsewhere), so they
+  // resolve to `create`; the executor unlinks the dir symlink first.
+  const packDirIsSymlink = dirSlot?.kind === 'symlink';
+
   const files: FileResolution[] = [];
   for (const [rel, content] of Object.entries(pack.files)) {
     const abs = join(packDir, rel);
@@ -200,6 +213,7 @@ function planSkillDirsPack(
     canonicalKey: canonicalKey(packDir),
     files,
     reason: files.find((f) => f.reason)?.reason,
+    replaceSymlink: packDirIsSymlink,
   };
 }
 
@@ -239,6 +253,7 @@ function planWindsurf(
       files: [],
       ownedContent: canonical,
       currentContent: entry.content,
+      replaceSymlink: force,
     };
   }
 

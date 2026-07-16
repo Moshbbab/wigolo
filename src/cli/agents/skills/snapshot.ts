@@ -47,8 +47,9 @@ export function snapshotPath(path: string, captureContent = false): SnapshotEntr
     return { kind: 'file', sha256: hash, content };
   }
 
-  // Sockets/FIFOs/devices — treat as absent for our purposes but flag as dir
-  // so the "regular file where a dir must go" refuse doesn't misfire.
+  // Sockets/FIFOs/devices — reported as 'file' (with no hash) so that a socket
+  // sitting where a pack DIR must go trips the "regular file where a dir must
+  // go" refuse rather than being silently written through.
   return { kind: 'file' };
 }
 

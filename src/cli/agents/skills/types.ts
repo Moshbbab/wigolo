@@ -60,6 +60,12 @@ export interface FileResolution {
   content?: string;
   /** Whether this file is being adopted (no prior receipt, bytes matched). */
   adopted?: boolean;
+  /**
+   * The plan authorized replacing a symlink at this leaf (force + symlink dest).
+   * The executor unlinks the LINK before writing; without this flag a symlink
+   * found at write time is treated as a post-plan TOCTOU plant and refused.
+   */
+  replaceSymlink?: boolean;
   reason?: string;
 }
 
@@ -85,6 +91,11 @@ export interface PlanAction {
   ownedContent?: string;
   /** For fenced/owned: the exact bytes currently on disk (from snapshot). */
   currentContent?: string;
+  /**
+   * For fenced/owned targets: the plan authorized replacing a symlink at the
+   * destination (force + symlink dest). The executor unlinks the link first.
+   */
+  replaceSymlink?: boolean;
 }
 
 export interface SkillsPlan {
@@ -99,7 +110,11 @@ export interface PlanOptions {
   /** Packs to install; default = all catalog packs. */
   packs?: string[];
   scope: Scope;
-  /** Agents to target; default = detected agents. */
+  /**
+   * Agents to target; default = ALL SUPPORTED_AGENTS (the engine plans/lists
+   * for every supported agent when unset). Agent DETECTION — narrowing to the
+   * agents actually installed on this machine — lives in the CLI, not here.
+   */
   agents?: string[];
   cwd: string;
   force?: boolean;

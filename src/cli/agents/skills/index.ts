@@ -9,6 +9,7 @@ export {
   applySkillsPlan,
   listSkills,
   removeSkills,
+  planRemove,
   removeAllSkills,
   installSkills,
 } from './executor.js';

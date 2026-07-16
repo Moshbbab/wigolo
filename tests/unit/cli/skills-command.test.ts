@@ -314,6 +314,73 @@ describe('runSkills — remove', () => {
   });
 });
 
+describe('runSkills — --json purity (F7): stdout is ONE JSON document', () => {
+  it('add --dry-run --json emits exactly one JSON object on stdout, no human text', async () => {
+    withDetected(['claude-code']);
+    const code = await runSkills(['add', 'wigolo-search', '--dry-run', '--json']);
+    expect(code).toBe(0);
+    // The ENTIRE stdout must parse as a single JSON document.
+    const full = out().trim();
+    expect(() => JSON.parse(full)).not.toThrow();
+    const parsed = JSON.parse(full);
+    expect(parsed.status).toBe('ok');
+    // No stray human lines leaked before/after.
+    expect(full.startsWith('{')).toBe(true);
+    expect(full.endsWith('}')).toBe(true);
+  });
+
+  it('list --json emits exactly one JSON document on stdout', async () => {
+    withDetected(['claude-code']);
+    const code = await runSkills(['list', '--agent', 'claude-code', '--json']);
+    expect(code).toBe(0);
+    const full = out().trim();
+    expect(() => JSON.parse(full)).not.toThrow();
+    expect(full.startsWith('{') && full.endsWith('}')).toBe(true);
+  });
+
+  it('remove --dry-run --json emits exactly one JSON document on stdout', async () => {
+    withDetected(['claude-code']);
+    await runSkills(['add', 'wigolo-search']);
+    stdoutLines = [];
+    stderrLines = [];
+    const code = await runSkills(['remove', 'wigolo-search', '--agent', 'claude-code', '--dry-run', '--json']);
+    expect(code).toBe(0);
+    const full = out().trim();
+    expect(() => JSON.parse(full)).not.toThrow();
+    expect(full.startsWith('{') && full.endsWith('}')).toBe(true);
+  });
+});
+
+describe('runSkills — remove --dry-run per-file preview (F8)', () => {
+  it('preview shows remove actions for an installed pack, fs untouched', async () => {
+    withDetected(['claude-code']);
+    await runSkills(['add', 'wigolo-search']);
+    stdoutLines = [];
+    stderrLines = [];
+    const code = await runSkills(['remove', 'wigolo-search', '--agent', 'claude-code', '--dry-run', '--json']);
+    expect(code).toBe(0);
+    const env = jsonEnvelope();
+    expect(env.actions.some((a) => a.status === 'remove')).toBe(true);
+    expect(existsSync(join(tmpProject, '.claude', 'skills', 'wigolo-search', 'SKILL.md'))).toBe(true);
+  });
+
+  it('preview shows refuse for a user-modified file and exits 2, fs untouched', async () => {
+    withDetected(['claude-code']);
+    await runSkills(['add', 'wigolo-search']);
+    const f = join(tmpProject, '.claude', 'skills', 'wigolo-search', 'SKILL.md');
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(f, 'user hand edit\n', 'utf-8');
+    const before = hashTree(tmpProject);
+    stdoutLines = [];
+    stderrLines = [];
+    const code = await runSkills(['remove', 'wigolo-search', '--agent', 'claude-code', '--dry-run', '--json']);
+    expect(code).toBe(2);
+    const env = jsonEnvelope();
+    expect(env.actions.some((a) => a.status === 'refuse')).toBe(true);
+    expect(hashTree(tmpProject)).toBe(before); // nothing changed on disk
+  });
+});
+
 describe('runSkills — --json envelope on refusal paths', () => {
   it('--json on a usage error carries status:error, exit 2', async () => {
     const code = await runSkills(['add', '--agent', 'vscode', '--json']);

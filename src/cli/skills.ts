@@ -3,6 +3,7 @@ import {
   applySkillsPlan,
   listSkills,
   removeSkills,
+  planRemove,
   SUPPORTED_AGENTS,
   listPackNames,
 } from './agents/skills/index.js';
@@ -181,7 +182,13 @@ export async function runSkills(args: string[]): Promise<number> {
   const scope: Scope = parsed.global ? 'global' : 'project';
 
   if (parsed.help) {
-    writeOut(USAGE);
+    // Under --json, keep stdout to the single JSON document (usage → stderr).
+    if (parsed.json) {
+      writeErr(USAGE);
+      emitJson({ status: 'ok', scope, actions: [], summary: 'usage' });
+    } else {
+      writeOut(USAGE);
+    }
     return 0;
   }
 
@@ -293,8 +300,9 @@ async function runAddOrRemove(
     }
 
     if (parsed.dryRun) {
-      renderPlan(plan, { dryRun: true });
+      // Under --json the JSON document is the ONLY thing on stdout.
       if (parsed.json) emitPlanJson(plan, scope);
+      else renderPlan(plan, { dryRun: true });
       return planHasRefusal(plan) ? 2 : 0;
     }
 
@@ -304,33 +312,24 @@ async function runAddOrRemove(
     } catch (err) {
       return failExec(err, scope, parsed.json);
     }
-    renderApply(plan, result);
     if (parsed.json) emitApplyJson(plan, result, scope);
+    else renderApply(plan, result);
     return result.refused.length ? 2 : 0;
   }
 
   // remove
   if (parsed.dryRun) {
-    // Removal has no pure planner; surface intent without mutating.
-    const note =
-      `Would remove ${packs ? packs.join(', ') : 'all packs'} for ` +
-      `${agents.join(', ')} at ${scope} scope.`;
-    writeOut(note);
-    writeOut('(dry-run: no files were changed)');
-    if (parsed.json) {
-      emitJson({
-        status: 'ok',
-        scope,
-        actions: agents.map((agent) => ({
-          agents: [agent],
-          packs: packs ?? listPackNames(),
-          path: '',
-          status: 'remove',
-        })),
-        summary: 'dry-run: no files changed',
-      });
+    // Pure preview via the engine — same remove/refuse/notice action list, no
+    // fs or receipt mutation.
+    let plan: SkillsPlan;
+    try {
+      plan = planRemove({ packs, scope, agents, cwd, force: parsed.force });
+    } catch (err) {
+      return failExec(err, scope, parsed.json);
     }
-    return 0;
+    if (parsed.json) emitPlanJson(plan, scope);
+    else renderPlan(plan, { dryRun: true });
+    return planHasRefusal(plan) ? 2 : 0;
   }
 
   let result: ApplyResult;
@@ -339,8 +338,8 @@ async function runAddOrRemove(
   } catch (err) {
     return failExec(err, scope, parsed.json);
   }
-  renderRemove(result);
   if (parsed.json) emitRemoveJson(result, scope);
+  else renderRemove(result);
   return result.refused.length ? 2 : 0;
 }
 
@@ -375,7 +374,7 @@ function runList(parsed: ParsedArgs, scope: Scope): number {
     return failExec(err, scope, parsed.json);
   }
 
-  renderList(entries, notSupportedRows, scope);
+  if (!parsed.json) renderList(entries, notSupportedRows, scope);
   if (parsed.json) {
     const actions: JsonAction[] = entries.map((e) => ({
       agents: [e.agent],

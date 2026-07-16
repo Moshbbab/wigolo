@@ -23,6 +23,8 @@ describe('runDaemon', () => {
 
   beforeEach(() => {
     process.env = { ...originalEnv };
+    delete process.env.WIGOLO_API_TOKEN;
+    delete process.env.WIGOLO_API_TOKEN_FILE;
     resetConfig();
     vi.clearAllMocks();
     stderrOutput = '';
@@ -95,6 +97,61 @@ describe('runDaemon', () => {
     const { parseDaemonArgs } = await import('../../../src/cli/daemon.js');
     const parsed = parseDaemonArgs(['--unknown', 'value', '--port', '4444']);
     expect(parsed.port).toBe(4444);
+  });
+
+  it('parses --allow-unauthenticated', async () => {
+    const { parseDaemonArgs } = await import('../../../src/cli/daemon.js');
+    expect(parseDaemonArgs([]).allowUnauthenticated).toBe(false);
+    expect(parseDaemonArgs(['--allow-unauthenticated']).allowUnauthenticated).toBe(true);
+  });
+
+  it('honors WIGOLO_SERVE_ALLOW_UNAUTHENTICATED=1 for the override', async () => {
+    process.env.WIGOLO_SERVE_ALLOW_UNAUTHENTICATED = '1';
+    const { parseDaemonArgs } = await import('../../../src/cli/daemon.js');
+    expect(parseDaemonArgs([]).allowUnauthenticated).toBe(true);
+    delete process.env.WIGOLO_SERVE_ALLOW_UNAUTHENTICATED;
+  });
+});
+
+describe('checkServeBindGate (fail-closed bind matrix)', () => {
+  const originalEnv = process.env;
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+    delete process.env.WIGOLO_API_TOKEN;
+    delete process.env.WIGOLO_API_TOKEN_FILE;
+  });
+  afterEach(() => { process.env = originalEnv; });
+
+  it('non-loopback bind + no token + no override → refuses, message names WIGOLO_API_TOKEN + override', async () => {
+    const { checkServeBindGate } = await import('../../../src/cli/daemon.js');
+    const r = checkServeBindGate({ host: '0.0.0.0', port: 3333, allowUnauthenticated: false });
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain('WIGOLO_API_TOKEN');
+    expect(r.message).toContain('--allow-unauthenticated');
+  });
+
+  it('loopback bind + no token → starts', async () => {
+    const { checkServeBindGate } = await import('../../../src/cli/daemon.js');
+    expect(checkServeBindGate({ host: '127.0.0.1', port: 3333, allowUnauthenticated: false }).ok).toBe(true);
+  });
+
+  it('non-loopback bind + token → starts (and returns the token)', async () => {
+    process.env.WIGOLO_API_TOKEN = 'secret';
+    const { checkServeBindGate } = await import('../../../src/cli/daemon.js');
+    const r = checkServeBindGate({ host: '0.0.0.0', port: 3333, allowUnauthenticated: false });
+    expect(r.ok).toBe(true);
+    expect(r.token).toBe('secret');
+  });
+
+  it('non-loopback bind + override → starts', async () => {
+    const { checkServeBindGate } = await import('../../../src/cli/daemon.js');
+    expect(checkServeBindGate({ host: '0.0.0.0', port: 3333, allowUnauthenticated: true }).ok).toBe(true);
+  });
+
+  it('empty WIGOLO_API_TOKEN = unconfigured (non-loopback refuses)', async () => {
+    process.env.WIGOLO_API_TOKEN = '   ';
+    const { checkServeBindGate } = await import('../../../src/cli/daemon.js');
+    expect(checkServeBindGate({ host: '0.0.0.0', port: 3333, allowUnauthenticated: false }).ok).toBe(false);
   });
 });
 

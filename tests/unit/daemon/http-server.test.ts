@@ -60,6 +60,9 @@ vi.mock('../../../src/searxng/docker.js', () => ({
 
 describe('DaemonHttpServer', () => {
   beforeEach(() => {
+    // An ambient API token in dev/CI would 401 the /mcp tests below.
+    delete process.env.WIGOLO_API_TOKEN;
+    delete process.env.WIGOLO_API_TOKEN_FILE;
     resetConfig();
     vi.clearAllMocks();
   });
@@ -399,6 +402,8 @@ describe('DaemonHttpServer — POST /admin/reset-breakers auth (D9)', () => {
   let dir: string;
 
   beforeEach(async () => {
+    delete process.env.WIGOLO_API_TOKEN;
+    delete process.env.WIGOLO_API_TOKEN_FILE;
     resetConfig();
     vi.clearAllMocks();
     const { mkdtempSync } = await import('node:fs');

@@ -28,8 +28,25 @@ const PRIVATE_HOSTNAMES = new Set([
   'metadata.google.internal',
 ]);
 
+/**
+ * Stable machine-readable reason codes for a rejection. The REST error adapter
+ * keys the HTTP status on these codes — never on the human-readable `reason`
+ * prose (which embeds variable host values and can be reworded freely). A test
+ * pins the adapter's key set against this object so wording drift can never
+ * silently break status mapping.
+ */
+export const SSRF_CODES = {
+  INVALID_URL: 'ssrf_invalid_url',
+  BAD_PROTOCOL: 'ssrf_bad_protocol',
+  PRIVATE_TARGET: 'ssrf_private_target',
+  METADATA: 'ssrf_metadata',
+} as const;
+
+export type SsrfCode = (typeof SSRF_CODES)[keyof typeof SSRF_CODES];
+
 export interface SsrfRejection {
   ok: false;
+  code: SsrfCode;
   reason: string;
   hint: string;
 }
@@ -114,6 +131,7 @@ export function guardUrl(raw: string, fieldLabel: string): SsrfResult {
   if (typeof raw !== 'string' || raw.trim() === '') {
     return {
       ok: false,
+      code: SSRF_CODES.INVALID_URL,
       reason: `${fieldLabel} is required and must be a non-empty string`,
       hint: 'Pass a fully qualified http(s) URL.',
     };
@@ -125,6 +143,7 @@ export function guardUrl(raw: string, fieldLabel: string): SsrfResult {
   } catch {
     return {
       ok: false,
+      code: SSRF_CODES.INVALID_URL,
       reason: `${fieldLabel} is not a valid URL`,
       hint: 'Pass a fully qualified http(s) URL (e.g. "https://example.com/path").',
     };
@@ -133,6 +152,7 @@ export function guardUrl(raw: string, fieldLabel: string): SsrfResult {
   if (!ALLOWED_PROTOCOLS.has(parsed.protocol)) {
     return {
       ok: false,
+      code: SSRF_CODES.BAD_PROTOCOL,
       reason: `${fieldLabel} uses a forbidden protocol (${parsed.protocol})`,
       hint: 'Only http: and https: are allowed.',
     };
@@ -142,6 +162,7 @@ export function guardUrl(raw: string, fieldLabel: string): SsrfResult {
   if (PRIVATE_HOSTNAMES.has(host)) {
     return {
       ok: false,
+      code: host === 'metadata.google.internal' ? SSRF_CODES.METADATA : SSRF_CODES.PRIVATE_TARGET,
       reason: `${fieldLabel} hostname is a loopback/private alias (${host})`,
       hint: 'Use a public hostname; localhost / metadata aliases are blocked.',
     };
@@ -150,6 +171,7 @@ export function guardUrl(raw: string, fieldLabel: string): SsrfResult {
   if (isLoopbackIpv4(host)) {
     return {
       ok: false,
+      code: /^169\.254\./.test(host) ? SSRF_CODES.METADATA : SSRF_CODES.PRIVATE_TARGET,
       reason: `${fieldLabel} resolves to a loopback / private IPv4 (${host})`,
       hint: 'Public addresses only — 10/8, 127/8, 172.16/12, 192.168/16, 169.254/16, 0.0.0.0 are blocked.',
     };
@@ -159,6 +181,7 @@ export function guardUrl(raw: string, fieldLabel: string): SsrfResult {
     if (isPrivateIpv6(host)) {
       return {
         ok: false,
+        code: SSRF_CODES.PRIVATE_TARGET,
         reason: `${fieldLabel} resolves to a loopback / private IPv6 (${host})`,
         hint: 'Public addresses only — ::1, fe80::/10, fc00::/7 are blocked.',
       };
@@ -195,6 +218,7 @@ export function guardFetchUrl(
   if (typeof raw !== 'string' || raw.trim() === '') {
     return {
       ok: false,
+      code: SSRF_CODES.INVALID_URL,
       reason: `${fieldLabel} is required and must be a non-empty string`,
       hint: 'Pass a fully qualified http(s) URL.',
     };
@@ -206,6 +230,7 @@ export function guardFetchUrl(
   } catch {
     return {
       ok: false,
+      code: SSRF_CODES.INVALID_URL,
       reason: `${fieldLabel} is not a valid URL`,
       hint: 'Pass a fully qualified http(s) URL (e.g. "https://example.com/path").',
     };
@@ -214,6 +239,7 @@ export function guardFetchUrl(
   if (!ALLOWED_PROTOCOLS.has(parsed.protocol)) {
     return {
       ok: false,
+      code: SSRF_CODES.BAD_PROTOCOL,
       reason: `${fieldLabel} uses a forbidden protocol (${parsed.protocol})`,
       hint: 'Only http: and https: are allowed.',
     };
@@ -232,6 +258,7 @@ export function guardFetchUrl(
     }
     return {
       ok: false,
+      code: SSRF_CODES.METADATA,
       reason: `${fieldLabel} hostname is a private / metadata alias (${host})`,
       hint: 'Use a public hostname; cloud-metadata aliases are blocked.',
     };
@@ -242,6 +269,7 @@ export function guardFetchUrl(
   if (host === '0.0.0.0') {
     return {
       ok: false,
+      code: SSRF_CODES.PRIVATE_TARGET,
       reason: `${fieldLabel} resolves to an unspecified IPv4 (${host})`,
       hint: 'Specify a real host; 0.0.0.0 is the unspecified address.',
     };
@@ -260,6 +288,7 @@ export function guardFetchUrl(
   if (/^169\.254\./.test(host)) {
     return {
       ok: false,
+      code: SSRF_CODES.METADATA,
       reason: `${fieldLabel} resolves to a link-local IPv4 (${host})`,
       hint: 'Link-local addresses (169.254/16, incl. cloud metadata endpoints) are always blocked.',
     };
@@ -274,6 +303,7 @@ export function guardFetchUrl(
       if (o1 === 10) {
         return {
           ok: false,
+          code: SSRF_CODES.PRIVATE_TARGET,
           reason: `${fieldLabel} resolves to a private IPv4 (${host}, 10/8)`,
           hint: 'Private LAN addresses are blocked by default. Set WIGOLO_FETCH_ALLOW_PRIVATE=1 if you need to fetch a home LAN device.',
         };
@@ -281,6 +311,7 @@ export function guardFetchUrl(
       if (o1 === 192 && o2 === 168) {
         return {
           ok: false,
+          code: SSRF_CODES.PRIVATE_TARGET,
           reason: `${fieldLabel} resolves to a private IPv4 (${host}, 192.168/16)`,
           hint: 'Private LAN addresses are blocked by default. Set WIGOLO_FETCH_ALLOW_PRIVATE=1 if you need to fetch a home LAN device.',
         };
@@ -288,6 +319,7 @@ export function guardFetchUrl(
       if (o1 === 172 && o2 >= 16 && o2 <= 31) {
         return {
           ok: false,
+          code: SSRF_CODES.PRIVATE_TARGET,
           reason: `${fieldLabel} resolves to a private IPv4 (${host}, 172.16/12)`,
           hint: 'Private LAN addresses are blocked by default. Set WIGOLO_FETCH_ALLOW_PRIVATE=1 if you need to fetch a home LAN device.',
         };
@@ -295,6 +327,7 @@ export function guardFetchUrl(
       if (o1 === 100 && o2 >= 64 && o2 <= 127) {
         return {
           ok: false,
+          code: SSRF_CODES.PRIVATE_TARGET,
           reason: `${fieldLabel} resolves to a CGN IPv4 (${host}, 100.64/10)`,
           hint: 'Carrier-grade NAT addresses are blocked by default. Set WIGOLO_FETCH_ALLOW_PRIVATE=1 if you need to fetch a CGN address.',
         };
@@ -306,6 +339,7 @@ export function guardFetchUrl(
     if (isPrivateIpv6(host)) {
       return {
         ok: false,
+        code: SSRF_CODES.PRIVATE_TARGET,
         reason: `${fieldLabel} resolves to a loopback / private IPv6 (${host})`,
         hint: 'Public IPv6 addresses only — ::1, fe80::/10, fc00::/7 are blocked.',
       };

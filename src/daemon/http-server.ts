@@ -11,12 +11,25 @@ import { searxngConfigured } from '../searxng/enabled.js';
 import { createLogger } from '../logger.js';
 import { ensureAdminToken, readAdminToken, tokenMatches } from './admin-token.js';
 import { resetBreakers, getBreakerSnapshot } from '../search/core/engine-base.js';
+import { resolveApiToken } from './rest/auth.js';
+import type { RestRouter } from './rest/router.js';
 
 const log = createLogger('server');
 
 export interface DaemonOptions {
   port: number;
   host: string;
+  /** Configured API token (null = open mode). Resolved by the CLI. */
+  apiToken?: string | null;
+  /** Operator opted into open remote access. */
+  allowUnauthenticated?: boolean;
+  /**
+   * The bind host the REST auth pipeline reasons about, independent of the
+   * actual TCP listen host. Defaults to `host`. Lets tests simulate a
+   * non-loopback bind (open-mode override / target-guard rows) without
+   * actually binding a public interface.
+   */
+  restBindHost?: string;
 }
 
 export class DaemonHttpServer {
@@ -28,10 +41,59 @@ export class DaemonHttpServer {
   private sseSessions = new Map<string, { transport: SSEServerTransport; server: Server }>();
   private readonly port: number;
   private readonly host: string;
+  private readonly apiToken: string | null;
+  private readonly allowUnauthenticated: boolean;
+  private readonly restBindHost: string;
+  private restRouter: RestRouter | null = null;
+  private restRouterPromise: Promise<RestRouter> | null = null;
 
   constructor(options: DaemonOptions) {
     this.port = options.port;
     this.host = options.host;
+    // The CLI resolves the token; fall back to env resolution so direct
+    // DaemonHttpServer construction (tests, embedders) still honors it.
+    this.apiToken = options.apiToken !== undefined ? options.apiToken : resolveApiToken();
+    this.allowUnauthenticated = options.allowUnauthenticated ?? false;
+    this.restBindHost = options.restBindHost ?? options.host;
+  }
+
+  /**
+   * Lazily construct the REST router on first matching request. Nothing under
+   * `rest/` (including ajv) loads at boot, in stdio mode, or for /mcp-only use.
+   */
+  private async getRestRouter(): Promise<RestRouter> {
+    if (this.restRouter) return this.restRouter;
+    if (!this.restRouterPromise) {
+      this.restRouterPromise = (async () => {
+        const { RestRouter } = await import('./rest/router.js');
+        const router = new RestRouter({
+          subsystems: this.subsystems!,
+          bindHost: this.restBindHost,
+          token: this.apiToken,
+          allowUnauthenticated: this.allowUnauthenticated,
+        });
+        this.restRouter = router;
+        return router;
+      })();
+    }
+    return this.restRouterPromise;
+  }
+
+  /** Whether a token-configured daemon should bearer-gate the MCP transport
+   * routes (/mcp, /sse, /messages). 401 envelope on failure. */
+  private mcpBearerRejected(req: IncomingMessage, res: ServerResponse): boolean {
+    if (!this.apiToken) return false;
+    const auth = req.headers.authorization ?? '';
+    const provided = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length).trim() : null;
+    if (tokenMatches(this.apiToken, provided)) return false;
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      ok: false,
+      error: 'Missing or invalid bearer token',
+      error_reason: 'unauthorized',
+      hint: 'Provide a valid "Authorization: Bearer <token>" header (set via WIGOLO_API_TOKEN).',
+    }));
+    return true;
   }
 
   async start(): Promise<string> {
@@ -96,23 +158,40 @@ export class DaemonHttpServer {
       return this.handleHealthRequest(res);
     }
 
+    // REST surface — lazily loaded so rest/ + ajv never touch the boot / stdio
+    // path. Delegated by prefix; the router owns method gating + auth.
+    if (
+      pathname.startsWith('/v1/') ||
+      pathname === '/openapi.json' ||
+      pathname === '/compat/firecrawl' ||
+      pathname.startsWith('/compat/firecrawl/')
+    ) {
+      const router = await this.getRestRouter();
+      return router.handle(req, res);
+    }
+
     if (pathname === '/mcp' && method === 'POST') {
+      if (this.mcpBearerRejected(req, res)) return;
       return this.handleStreamableHttpRequest(req, res);
     }
 
     if (pathname === '/mcp' && method === 'GET') {
+      if (this.mcpBearerRejected(req, res)) return;
       return this.handleStreamableHttpGet(req, res);
     }
 
     if (pathname === '/mcp' && method === 'DELETE') {
+      if (this.mcpBearerRejected(req, res)) return;
       return this.handleStreamableHttpDelete(req, res);
     }
 
     if (pathname === '/sse' && method === 'GET') {
+      if (this.mcpBearerRejected(req, res)) return;
       return this.handleSseRequest(req, res);
     }
 
     if (pathname === '/messages' && method === 'POST') {
+      if (this.mcpBearerRejected(req, res)) return;
       const sessionId = url.searchParams.get('sessionId');
       return this.handleSseMessageRequest(req, res, sessionId);
     }

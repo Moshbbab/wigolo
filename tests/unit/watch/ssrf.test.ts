@@ -1,5 +1,71 @@
 import { describe, it, expect } from 'vitest';
-import { guardUrl, guardFetchUrl } from '../../../src/watch/ssrf.js';
+import { guardUrl, guardFetchUrl, SSRF_CODES } from '../../../src/watch/ssrf.js';
+
+describe('SSRF stable reason codes', () => {
+  const allCodes = new Set(Object.values(SSRF_CODES));
+
+  it('exports a stable code set the error adapter can key on', () => {
+    expect(allCodes).toEqual(
+      new Set(['ssrf_invalid_url', 'ssrf_bad_protocol', 'ssrf_private_target', 'ssrf_metadata']),
+    );
+  });
+
+  it('invalid URL → ssrf_invalid_url', () => {
+    const r = guardFetchUrl('not-a-url', 'url');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe(SSRF_CODES.INVALID_URL);
+  });
+
+  it('empty string → ssrf_invalid_url', () => {
+    const r = guardFetchUrl('', 'url');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe(SSRF_CODES.INVALID_URL);
+  });
+
+  it('forbidden protocol → ssrf_bad_protocol', () => {
+    const r = guardFetchUrl('file:///etc/passwd', 'url');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe(SSRF_CODES.BAD_PROTOCOL);
+  });
+
+  it('link-local metadata IP → ssrf_metadata', () => {
+    const r = guardFetchUrl('http://169.254.169.254/latest/meta-data/', 'url');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe(SSRF_CODES.METADATA);
+  });
+
+  it('metadata hostname → ssrf_metadata', () => {
+    const r = guardFetchUrl('http://metadata.google.internal/', 'url');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe(SSRF_CODES.METADATA);
+  });
+
+  it('private RFC1918 IP → ssrf_private_target', () => {
+    const r = guardFetchUrl('http://10.0.0.5/', 'url');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe(SSRF_CODES.PRIVATE_TARGET);
+  });
+
+  it('loopback via guardUrl (strict) → ssrf_private_target', () => {
+    const r = guardUrl('http://127.0.0.1/', 'url');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe(SSRF_CODES.PRIVATE_TARGET);
+  });
+
+  it('every rejection carries a code drawn from the exported set', () => {
+    const cases = [
+      'not-a-url',
+      'file:///etc/passwd',
+      'http://169.254.169.254/',
+      'http://10.0.0.5/',
+      'http://metadata.google.internal/',
+    ];
+    for (const raw of cases) {
+      const r = guardFetchUrl(raw, 'url');
+      if (!r.ok) expect(allCodes.has(r.code)).toBe(true);
+    }
+  });
+});
 
 /**
  * WHY this matters: the `watch` tool fetches `url` on an interval AND, when

@@ -49,6 +49,20 @@ export type PlanStatus =
   | 'remove'
   | 'refuse';
 
+/** Per-file resolution within a pack dir (drives the executor's writes). */
+export interface FileResolution {
+  /** relPath within the pack dir. */
+  relPath: string;
+  /** Absolute path on disk. */
+  absPath: string;
+  status: PlanStatus;
+  /** Canonical (desired) content, LF-normalized. */
+  content?: string;
+  /** Whether this file is being adopted (no prior receipt, bytes matched). */
+  adopted?: boolean;
+  reason?: string;
+}
+
 /** One planned action against a single filesystem path. */
 export interface PlanAction {
   /** All selected agents that share this path (union). */
@@ -61,6 +75,16 @@ export interface PlanAction {
   relPath?: string;
   status: PlanStatus;
   reason?: string;
+  kind: TargetKind;
+  scope: Scope;
+  /** Canonical key for the receipt store. */
+  canonicalKey: string;
+  /** Per-file detail for skill-dirs packs (empty for fenced/owned). */
+  files: FileResolution[];
+  /** For fenced/owned targets: the canonical block/file content to write. */
+  ownedContent?: string;
+  /** For fenced/owned: the exact bytes currently on disk (from snapshot). */
+  currentContent?: string;
 }
 
 export interface SkillsPlan {

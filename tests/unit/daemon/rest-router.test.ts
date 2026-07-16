@@ -20,11 +20,13 @@ function makeReq(opts: {
   headers?: Record<string, string>;
   body?: string;
 }): IncomingMessage {
-  const req = new EventEmitter() as unknown as IncomingMessage & { destroy: () => void };
+  const req = new EventEmitter() as unknown as IncomingMessage & { destroy: () => void; pause: () => void; resume: () => void };
   (req as { method?: string }).method = opts.method ?? 'POST';
   (req as { url?: string }).url = opts.url ?? '/v1/fetch';
   (req as { headers: Record<string, string> }).headers = { host: '127.0.0.1:3333', ...(opts.headers ?? {}) };
   (req as { destroy: () => void }).destroy = vi.fn();
+  (req as { pause: () => void }).pause = vi.fn();
+  (req as { resume: () => void }).resume = vi.fn();
   process.nextTick(() => {
     if (opts.body !== undefined) req.emit('data', Buffer.from(opts.body));
     req.emit('end');

@@ -14,6 +14,20 @@ and the Docker build both point at the published artifact).
 - SDK package publishing (npm + PyPI) is a SEPARATE, deliberate act with its own
   naming/licensing decisions — not part of this runbook until those are settled.
 
+## 0.5. Skill-pack hash ledger (pre-publish, only when `skills/` changed)
+
+- If this release changes ANY file under `skills/`, append the OUTGOING (previous
+  release's) hashes to `assets/legacy-skill-hashes.json` before bumping:
+  `node scripts/gen-legacy-skill-hashes.mjs` regenerates the union from git
+  history — verify the previous release tag's bytes are included. Without this,
+  `wigolo skills remove` / `wigolo uninstall` refuses to clean receipt-less
+  installs of the previous version (the safe-remove fallback matches known
+  canonical bytes only).
+- Binary channel note: `packaging/binary/pkg.config.json` globs `skills/**/*` —
+  pkg globs that match nothing WARN instead of failing, so binary re-validation
+  (`scripts/verify-channel-binary.sh`) must include a skills-touching smoke
+  (`wigolo skills list`) to catch a silently empty snapshot.
+
 ## 1. npm publish (source of truth)
 
 - Handled by existing CI on the release tag (`make release-tag`). No manual

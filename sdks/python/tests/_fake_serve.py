@@ -31,7 +31,12 @@ def _parse_port(argv: list[str]) -> int:
 def main() -> int:
     argv = sys.argv[1:]
     if os.environ.get("FAKE_EXIT_IMMEDIATELY") == "1":
-        sys.stderr.write("fake serve: refusing to start (test-configured exit)\n")
+        # Echo the token to stderr so the SDK's redaction path is exercised:
+        # the surfaced error tail must NOT leak this value.
+        tok = os.environ.get("WIGOLO_API_TOKEN", "")
+        sys.stderr.write(
+            f"fake serve: refusing to start (test-configured exit) token={tok}\n"
+        )
         sys.stderr.flush()
         return 3
 

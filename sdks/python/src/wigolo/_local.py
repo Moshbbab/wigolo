@@ -21,11 +21,19 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from ._errors import WigoloError
 
+if TYPE_CHECKING:
+    from ._client import Client
+
 __all__ = ["LocalDaemon", "ensure_local_daemon", "local_client"]
+
+# A dedicated opener that ignores http_proxy/https_proxy/no_proxy env: loopback
+# traffic must NEVER route through a proxy (it breaks local mode and would leak
+# the bearer token through the proxy). An empty ProxyHandler disables proxies.
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 _DEFAULT_LOCAL_PORT = 3333
 _HEALTH_PROBE_TIMEOUT = 1.0
@@ -46,7 +54,7 @@ def _probe_health(base_url: str, timeout: float = _HEALTH_PROBE_TIMEOUT) -> _Hea
     """GET /health. Returns the HTTP status code, or None if refused/unreachable."""
     req = urllib.request.Request(f"{base_url}/health", method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _NO_PROXY_OPENER.open(req, timeout=timeout) as resp:
             return _HealthResult(resp.getcode())
     except urllib.error.HTTPError as exc:
         return _HealthResult(exc.code)
@@ -61,7 +69,7 @@ def _probe_tools(base_url: str, token: Optional[str], timeout: float = _HEALTH_P
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(f"{base_url}/v1/tools", method="GET", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _NO_PROXY_OPENER.open(req, timeout=timeout) as resp:
             resp.read()
             return _HealthResult(resp.getcode())
     except urllib.error.HTTPError as exc:
@@ -102,6 +110,44 @@ def _resolve_command() -> list[str]:
         "REST API, newer than 0.1.43-beta.2) or set WIGOLO_CLI to the executable "
         "path (or a JSON argv list)."
     )
+
+
+def _validate_port(value: Any, source: str) -> int:
+    """Coerce/validate a port to an int in 1–65535, else raise WigoloError.
+
+    A string must be a strict integer (no trailing junk, no float); an int/
+    numeric value is range-checked. Actionable message names the ``source``.
+    """
+    if isinstance(value, bool):  # bool is an int subclass — reject it explicitly.
+        raise WigoloError(f"{source} is not a valid port ({value!r}) — use 1–65535.")
+    if isinstance(value, int):
+        n = value
+    elif isinstance(value, str):
+        s = value.strip()
+        if not s.isdigit():
+            raise WigoloError(
+                f"{source} is not a valid port ({value!r}) — set it to an integer "
+                f"between 1 and 65535."
+            )
+        n = int(s)
+    else:
+        raise WigoloError(
+            f"{source} is not a valid port ({value!r}) — set it to an integer "
+            f"between 1 and 65535."
+        )
+    if not 1 <= n <= 65535:
+        raise WigoloError(
+            f"{source} is out of range ({n}) — set it to an integer between 1 "
+            f"and 65535."
+        )
+    return n
+
+
+def _redact_token(text: str, token: Optional[str]) -> str:
+    """Replace every occurrence of the resolved bearer token with a marker."""
+    if not token:
+        return text
+    return text.replace(token, "[redacted]")
 
 
 def _is_windows() -> bool:
@@ -276,11 +322,15 @@ def ensure_local_daemon(
     explicit ``base_url`` arg) is IGNORED — the daemon lives at
     ``http://127.0.0.1:{port}``.
     """
-    resolved_port = (
-        port
-        if port is not None
-        else int(os.environ.get("WIGOLO_LOCAL_PORT") or _DEFAULT_LOCAL_PORT)
-    )
+    if port is not None:
+        resolved_port = _validate_port(port, "port argument")
+    else:
+        env_port = os.environ.get("WIGOLO_LOCAL_PORT")
+        resolved_port = (
+            _validate_port(env_port, "WIGOLO_LOCAL_PORT")
+            if env_port
+            else _DEFAULT_LOCAL_PORT
+        )
     base_url = f"http://127.0.0.1:{resolved_port}"
 
     # Step 2: probe existing daemon.
@@ -308,11 +358,11 @@ def ensure_local_daemon(
 
     healthy = _wait_for_health(proc, base_url, ring)
     if healthy:
-        # Step 5 sanity: our child came up healthy. But a spawn race could mean
-        # ANOTHER process won the port and our child bind-errored then exited —
-        # _wait_for_health returns False in that case, so healthy here means our
-        # child is the healthy one OR someone else is and our child is still up.
-        # Verify capability before returning ownership.
+        # Our child came up healthy (_wait_for_health returns False if the child
+        # exited first, so a spawn-race loser is already handled below). We own
+        # a daemon WE spawned with a matching token, so no capability probe is
+        # needed here — the reuse path (_adopt_or_reject) is the only place that
+        # probes /v1/tools, because that is where token/version mismatch matters.
         return LocalDaemon(base_url, owned=True, process=proc, stderr_ring=ring)
 
     # Not healthy: child may have early-exited (possibly bind error because a
@@ -323,7 +373,7 @@ def ensure_local_daemon(
         if reprobe.status_code == 200:
             # Downgrade to reuse. Our child is already reaped (poll() != None).
             return _adopt_or_reject(base_url, resolved_port, token)
-        tail = "".join(ring)
+        tail = _redact_token("".join(ring), token)
         raise WigoloError(
             f"local wigolo daemon exited before becoming healthy on port "
             f"{resolved_port}. Try running `wigolo serve` manually to see the "
@@ -331,7 +381,7 @@ def ensure_local_daemon(
         )
 
     # Budget elapsed with child still running but never healthy: kill + raise.
-    tail = "".join(ring)
+    tail = _redact_token("".join(ring), token)
     daemon = LocalDaemon(base_url, owned=True, process=proc, stderr_ring=ring)
     daemon.close()
     raise WigoloError(
@@ -372,7 +422,7 @@ def _adopt_or_reject(base_url: str, port: int, token: Optional[str]) -> LocalDae
     )
 
 
-def local_client(**opts: Any):
+def local_client(**opts: Any) -> "Client":
     """Construct a ``Client`` in embedded local mode.
 
     Accepts the same options as ``Client`` (base_url is ignored in local

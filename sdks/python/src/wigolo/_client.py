@@ -10,11 +10,15 @@ from __future__ import annotations
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
-from typing import Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from ._errors import WigoloAPIError, WigoloConnectionError
 from ._manifest import MANIFEST
+
+if TYPE_CHECKING:
+    from ._local import LocalDaemon
 
 __all__ = ["Client"]
 
@@ -22,6 +26,20 @@ _DEFAULT_BASE_URL = "http://127.0.0.1:3333"
 
 # SDK-local keyword args that must never appear in the manifest param list.
 _SDK_LOCAL_KWARGS = frozenset({"timeout"})
+
+# Loopback traffic must never traverse a proxy: it breaks local mode and would
+# leak the bearer token through the proxy. This opener ignores http(s)_proxy.
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _is_loopback(base_url: str) -> bool:
+    try:
+        host = urllib.parse.urlsplit(base_url).hostname or ""
+    except ValueError:
+        return False
+    return host.lower() in _LOOPBACK_HOSTS
 
 
 def _env_flag(name: str) -> bool:
@@ -75,7 +93,7 @@ class Client:
         self._timeout = timeout
         self._token = resolved_token
         self._local = use_local
-        self._daemon = None  # set in local mode
+        self._daemon: Optional["LocalDaemon"] = None  # set in local mode
 
         if use_local:
             # Lazy import to avoid a subprocess module at top level.
@@ -96,6 +114,11 @@ class Client:
                 self._base_url = os.environ.get("WIGOLO_BASE_URL") or _DEFAULT_BASE_URL
 
         self._base_url = self._base_url.rstrip("/")
+        # Loopback targets bypass any ambient proxy (see _NO_PROXY_OPENER); the
+        # default opener (which honors http(s)_proxy) is used otherwise.
+        self._urlopen = (
+            _NO_PROXY_OPENER.open if _is_loopback(self._base_url) else urllib.request.urlopen
+        )
 
     # ---- lifecycle -------------------------------------------------------
 
@@ -145,9 +168,9 @@ class Client:
             self._timeout if self._timeout is not None else 60.0
         )
         try:
-            with urllib.request.urlopen(req, timeout=effective_timeout) as resp:
+            with self._urlopen(req, timeout=effective_timeout) as resp:
                 raw = resp.read()
-                return self._parse_ok(raw)
+                return self._parse_ok(raw, url)
         except urllib.error.HTTPError as exc:
             raise self._api_error_from_http(exc) from None
         except urllib.error.URLError as exc:
@@ -164,14 +187,20 @@ class Client:
             ) from exc
 
     @staticmethod
-    def _parse_ok(raw: bytes) -> Any:
+    def _parse_ok(raw: bytes, url: str) -> Any:
         # 2xx bodies are returned verbatim. Degraded successes carry in-body
-        # warning/error fields and MUST NOT raise.
+        # warning/error fields and MUST NOT raise. The REST contract is
+        # JSON-only, so a non-JSON 2xx body means we are not talking to a
+        # wigolo daemon (a proxy/captive-portal/wrong-service) — raise.
         text = raw.decode("utf-8", errors="replace")
         try:
             return json.loads(text)
-        except json.JSONDecodeError:
-            return text
+        except json.JSONDecodeError as exc:
+            raise WigoloConnectionError(
+                f"received a non-JSON success body from {url} "
+                f"({text[:200]!r}) — the endpoint does not look like a wigolo "
+                f"REST daemon."
+            ) from exc
 
     @staticmethod
     def _api_error_from_http(exc: urllib.error.HTTPError) -> WigoloAPIError:
@@ -214,6 +243,7 @@ class Client:
             error_reason=error_reason,
             stage=stage,
             retry_after=retry_after,
+            raw_body=text or None,
         )
 
     def _call_tool(
@@ -229,9 +259,35 @@ class Client:
     def health(self, *, timeout: Optional[float] = None) -> Any:
         """GET /health. Returns status even when the server is degraded.
 
-        The ``searxng`` field is the search-aggregator sidecar status.
+        A degraded daemon answers ``/health`` with HTTP 503 carrying the SAME
+        report body as a healthy 200. This method returns that report in both
+        cases (it does NOT raise on the contract-defined 503-with-body) so
+        callers can inspect ``status``/``searxng``. Only a transport failure or
+        a non-JSON body raises. The ``searxng`` field is the search-aggregator
+        sidecar status.
         """
-        return self._request("GET", "/health", timeout=timeout or 10.0)
+        try:
+            return self._request("GET", "/health", timeout=timeout or 10.0)
+        except WigoloAPIError as exc:
+            # The 503-down report is a value, not an error. Any other status,
+            # or an unparseable body, is re-raised.
+            if exc.status == 503:
+                parsed = self._health_report_from_error(exc)
+                if parsed is not None:
+                    return parsed
+            raise
+
+    @staticmethod
+    def _health_report_from_error(exc: WigoloAPIError) -> Optional[dict[str, Any]]:
+        """Recover the JSON /health report from a 503 error, or None if absent."""
+        raw = getattr(exc, "raw_body", None)
+        if not raw:
+            return None
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
 
     def list_tools(self, *, timeout: Optional[float] = None) -> Any:
         """GET /v1/tools. Lists the available tools (bearer-gated in token mode)."""

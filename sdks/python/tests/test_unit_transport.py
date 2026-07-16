@@ -230,9 +230,61 @@ def test_health_returns_verbatim(server):
     assert res["status"] == "healthy"
 
 
+def test_health_503_returns_report_not_raised(server):
+    # The contract: a degraded daemon answers /health with 503 carrying the
+    # SAME report body. health() must return it, not raise — the docstring
+    # promises the report, so this pins the CR-2 special-case.
+    base_url, state = server
+    c = Client(base_url=base_url)
+    state.status = 503
+    state.body = {"status": "down", "searxng": "unavailable"}
+    res = c.health()
+    assert res["status"] == "down"
+    assert res["searxng"] == "unavailable"
+
+
+def test_health_non_503_error_still_raises(server):
+    # A non-503 error on /health is a real failure and must still raise.
+    base_url, state = server
+    c = Client(base_url=base_url)
+    state.status = 500
+    state.body = {"status": "boom"}
+    with pytest.raises(WigoloAPIError) as ei:
+        c.health()
+    assert ei.value.status == 500
+
+
+def test_non_json_2xx_raises_connection_error(server):
+    # The REST contract is JSON-only: a 2xx with a non-JSON body means we are
+    # not talking to a wigolo daemon (CR-10). Must raise, not return raw text.
+    base_url, state = server
+    c = Client(base_url=base_url)
+    state.status = 200
+    state.body = "<html>not a daemon</html>"
+    with pytest.raises(WigoloConnectionError) as ei:
+        c.search(query="x")
+    assert "non-JSON" in str(ei.value)
+
+
 def test_crawl_map_response_verbatim(server):
     base_url, state = server
     c = Client(base_url=base_url)
     state.body = {"urls": ["a", "b"], "total_found": 2, "crawled": 0}
     res = c.crawl(url="https://example.com", strategy="map")
     assert "urls" in res and "pages" not in res
+
+
+def test_loopback_bypasses_ambient_http_proxy(server, monkeypatch):
+    # With http_proxy pointing at a dead address and no_proxy UNSET, the default
+    # urllib opener would route loopback traffic through the (dead) proxy and
+    # fail. The client MUST bypass the proxy for 127.0.0.1 targets (CR-3).
+    base_url, state = server
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")  # dead proxy
+    monkeypatch.setenv("https_proxy", "http://127.0.0.1:9")
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    c = Client(base_url=base_url)
+    state.body = {"results": []}
+    # Would raise a connection error if routed through the dead proxy.
+    res = c.search(query="x")
+    assert res == {"results": []}

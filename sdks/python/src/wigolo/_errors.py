@@ -22,7 +22,8 @@ class WigoloAPIError(WigoloError):
     ``error``/``error_reason``/``stage`` come from the server's error
     envelope when present. ``retry_after`` is parsed from the
     ``Retry-After`` header (seconds) when the server sends one — set on
-    429 responses.
+    429 responses. ``raw_body`` is the decoded response body (used to
+    recover the report from a contract-defined 503-with-body ``/health``).
     """
 
     def __init__(
@@ -34,6 +35,7 @@ class WigoloAPIError(WigoloError):
         error_reason: Optional[str] = None,
         stage: Optional[str] = None,
         retry_after: Optional[int] = None,
+        raw_body: Optional[str] = None,
     ) -> None:
         super().__init__(message)
         self.status = status
@@ -41,6 +43,7 @@ class WigoloAPIError(WigoloError):
         self.error_reason = error_reason
         self.stage = stage
         self.retry_after = retry_after
+        self.raw_body = raw_body
 
 
 class WigoloConnectionError(WigoloError):

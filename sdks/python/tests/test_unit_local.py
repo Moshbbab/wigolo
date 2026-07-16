@@ -143,3 +143,32 @@ def test_client_local_true_uses_daemon(monkeypatch):
         assert c._daemon is not None and c._daemon.owned is True
     finally:
         c.close()
+
+
+def test_bad_env_port_non_numeric_raises(monkeypatch):
+    # A non-numeric WIGOLO_LOCAL_PORT must raise an actionable WigoloError, not
+    # a raw ValueError (CR-4).
+    monkeypatch.setenv("WIGOLO_LOCAL_PORT", "3333;x")
+    with pytest.raises(WigoloError) as ei:
+        ensure_local_daemon(token=None, command=_fake_cmd())
+    assert "WIGOLO_LOCAL_PORT" in str(ei.value)
+
+
+def test_bad_port_out_of_range_raises(monkeypatch):
+    with pytest.raises(WigoloError) as ei:
+        ensure_local_daemon(token=None, port=70000, command=_fake_cmd())
+    assert "range" in str(ei.value).lower()
+    with pytest.raises(WigoloError):
+        ensure_local_daemon(token=None, port=0, command=_fake_cmd())
+
+
+def test_spawn_error_stderr_redacts_token(monkeypatch):
+    # A child that exits early after echoing its token to stderr must NOT leak
+    # the token into the surfaced error tail (mirror of TS CR-9).
+    port = _free_port()
+    secret = "super-secret-bearer-xyz"
+    monkeypatch.setenv("FAKE_EXIT_IMMEDIATELY", "1")
+    with pytest.raises(WigoloError) as ei:
+        ensure_local_daemon(token=secret, port=port, command=_fake_cmd())
+    msg = str(ei.value)
+    assert secret not in msg

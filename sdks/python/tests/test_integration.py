@@ -99,70 +99,81 @@ ADAPTERS = [_SyncAdapter, _AsyncAdapter]
 ADAPTER_IDS = ["sync", "async"]
 
 
-@pytest.fixture(params=ADAPTERS, ids=ADAPTER_IDS)
-def open_client(request, open_server):
-    a = request.param(open_server.base_url, None)
+# A client fixture that spans BOTH modes (open + token) and BOTH transports
+# (sync + async) so the full 10-tool matrix runs through the bearer-gated
+# server too, not just open mode (TC-1).
+@pytest.fixture(
+    params=[
+        (adapter, mode)
+        for mode in ("open", "token")
+        for adapter in ADAPTERS
+    ],
+    ids=[
+        f"{mode}-{aid}"
+        for mode in ("open", "token")
+        for aid in ADAPTER_IDS
+    ],
+)
+def any_client(request, open_server, token_server):
+    adapter, mode = request.param
+    if mode == "open":
+        a = adapter(open_server.base_url, None)
+    else:
+        a = adapter(token_server.base_url, token_server.token)
     yield a
     a.close()
 
 
-@pytest.fixture(params=ADAPTERS, ids=ADAPTER_IDS)
-def token_client(request, token_server):
-    a = request.param(token_server.base_url, token_server.token)
-    yield a
-    a.close()
+# ---- all 10 tools succeed (open + token mode) ------------------------------
 
 
-# ---- all 10 tools succeed (open mode) --------------------------------------
-
-
-def test_search(open_client):
-    res = open_client.call("search", query="wigolo test", max_results=3)
+def test_search(any_client):
+    res = any_client.call("search", query="wigolo test", max_results=3)
     assert isinstance(res, dict)
     assert "results" in res or "evidence" in res
 
 
-def test_fetch(open_client):
-    res = open_client.call("fetch", url="https://example.com")
+def test_fetch(any_client):
+    res = any_client.call("fetch", url="https://example.com")
     assert isinstance(res, dict)
     assert "markdown" in res or "error" in res
 
 
-def test_crawl_map(open_client):
-    res = open_client.call(
+def test_crawl_map(any_client):
+    res = any_client.call(
         "crawl", url="https://example.com", strategy="map", max_pages=3
     )
     assert "urls" in res
     assert "pages" not in res
 
 
-def test_cache_stats(open_client):
-    res = open_client.call("cache", stats=True)
+def test_cache_stats(any_client):
+    res = any_client.call("cache", stats=True)
     assert "stats" in res
 
 
-def test_extract_tables(open_client):
+def test_extract_tables(any_client):
     html = "<table><tr><th>a</th></tr><tr><td>1</td></tr></table>"
-    res = open_client.call("extract", html=html, mode="tables")
+    res = any_client.call("extract", html=html, mode="tables")
     assert "data" in res
 
 
-def test_find_similar(open_client):
-    res = open_client.call("find_similar", concept="web scraping", include_web=False)
+def test_find_similar(any_client):
+    res = any_client.call("find_similar", concept="web scraping", include_web=False)
     assert isinstance(res, dict)
     assert "results" in res or "method" in res
 
 
-def test_research(open_client):
-    res = open_client.call(
+def test_research(any_client):
+    res = any_client.call(
         "research", question="what is example.com", depth="quick", max_sources=2
     )
     assert isinstance(res, dict)
     assert "report" in res or "brief" in res or "sources" in res
 
 
-def test_agent(open_client):
-    res = open_client.call(
+def test_agent(any_client):
+    res = any_client.call(
         "agent",
         prompt="summarize",
         urls=["https://example.com"],
@@ -173,24 +184,19 @@ def test_agent(open_client):
     assert "result" in res or "sources" in res or "warning" in res
 
 
-def test_diff(open_client):
-    res = open_client.call(
+def test_diff(any_client):
+    res = any_client.call(
         "diff", old={"markdown": "a"}, new={"markdown": "b"}, output="summary"
     )
     assert "changed" in res
 
 
-def test_watch_list(open_client):
-    res = open_client.call("watch", action="list")
+def test_watch_list(any_client):
+    res = any_client.call("watch", action="list")
     assert "jobs" in res or "job" in res or "notice" in res
 
 
 # ---- token mode ------------------------------------------------------------
-
-
-def test_token_mode_with_token_works(token_client):
-    res = token_client.call("cache", stats=True)
-    assert "stats" in res
 
 
 def test_token_mode_without_client_token_401(token_server):

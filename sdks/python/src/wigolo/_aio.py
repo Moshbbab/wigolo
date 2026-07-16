@@ -28,7 +28,14 @@ class AsyncClient:
     Wraps a synchronous ``Client`` and dispatches each blocking request to
     a bounded ``ThreadPoolExecutor`` (``max_workers``, default 16).
 
-    Args match ``Client`` plus ``max_workers`` for the executor bound.
+    Args match ``Client`` (including the local-mode ``port`` / ``command``
+    overrides) plus ``max_workers`` for the executor bound.
+
+    Note: when ``local=True`` (or ``WIGOLO_LOCAL=1``), the daemon
+    probe-or-spawn runs SYNCHRONOUSLY inside this constructor (it may block
+    the calling thread up to ~20s while the daemon becomes healthy). This
+    mirrors the synchronous ``Client`` and keeps construction simple; if you
+    need it fully off-loop, construct the ``AsyncClient`` in a worker thread.
     """
 
     def __init__(
@@ -38,9 +45,17 @@ class AsyncClient:
         timeout: Optional[float] = None,
         local: Optional[bool] = None,
         max_workers: int = 16,
+        *,
+        port: Optional[int] = None,
+        command: Optional[list[str]] = None,
     ) -> None:
         self._client = Client(
-            base_url=base_url, token=token, timeout=timeout, local=local
+            base_url=base_url,
+            token=token,
+            timeout=timeout,
+            local=local,
+            port=port,
+            command=command,
         )
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
 

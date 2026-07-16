@@ -52,6 +52,7 @@ for (const mode of modes) {
     it('fetch', async () => {
       const res = await client.fetch({ url: 'https://example.com' });
       expect(res).toBeTypeOf('object');
+      expect('markdown' in res || 'error' in res).toBe(true);
     });
 
     it('crawl map strategy returns urls and no pages', async () => {
@@ -67,6 +68,7 @@ for (const mode of modes) {
     it('cache stats', async () => {
       const res = await client.cache({ stats: true });
       expect(res).toBeTypeOf('object');
+      expect(res.stats).toBeDefined();
     });
 
     it('extract tables (offline html)', async () => {
@@ -81,6 +83,7 @@ for (const mode of modes) {
     it('findSimilar (cache only)', async () => {
       const res = await client.findSimilar({ concept: 'web scraping', include_web: false });
       expect(res).toBeTypeOf('object');
+      expect('results' in res || 'method' in res).toBe(true);
     });
 
     it('research quick', async () => {
@@ -90,6 +93,7 @@ for (const mode of modes) {
         max_sources: 2,
       });
       expect(res).toBeTypeOf('object');
+      expect('report' in res || 'brief' in res || 'sources' in res).toBe(true);
     });
 
     it('agent', async () => {
@@ -100,6 +104,7 @@ for (const mode of modes) {
         max_time_ms: 15000,
       });
       expect(res).toBeTypeOf('object');
+      expect('result' in res || 'sources' in res || 'warning' in res).toBe(true);
     });
 
     it('diff summary', async () => {

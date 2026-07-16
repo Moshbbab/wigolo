@@ -83,6 +83,25 @@ one via the `wigolo` CLI on your `PATH` (override with `WIGOLO_CLI`). A daemon
 this client spawns is stopped on `close()`; a daemon it merely reused is left
 running. In local mode `base_url` / `WIGOLO_BASE_URL` are ignored.
 
+`AsyncClient(local=True)` accepts the same `port` / `command` overrides, but
+note the daemon probe-or-spawn runs **synchronously in the constructor** (it
+may block the calling thread up to ~20s while the daemon becomes healthy).
+
+### Security notes for embedded mode
+
+- **`WIGOLO_CLI` is an exec-from-env vector.** In embedded mode the SDK spawns
+  the process named by `WIGOLO_CLI` (a JSON argv list, or a single executable
+  path). Anything that can set this env var chooses what binary runs. When you
+  hand the SDK untrusted environments, strip `WIGOLO_CLI` (and
+  `WIGOLO_LOCAL_PORT`) before construction and pass the trusted argv through the
+  explicit `command=` argument — the argument always overrides the env.
+- **Point `command` at the server binary itself, not a wrapper.** On POSIX,
+  forced-kill escalation signals only the direct child. A wrapper such as
+  `["npx", "wigolo"]` makes the launcher the direct child, so a hung `close()`
+  can kill the launcher while the real daemon it spawned is orphaned and keeps
+  holding the port. Resolve to the actual `wigolo` executable so `close()`
+  reaches the process that owns the socket.
+
 ## Configuration
 
 Resolution order for each option is **explicit argument > environment

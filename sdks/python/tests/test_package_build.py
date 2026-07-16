@@ -1,7 +1,7 @@
 """Build the wheel and assert PEP 561 marker + expected members ship.
 
-Skips gracefully if the ``build`` module is unavailable (it is a dev-only
-dependency installed in the SDK venv).
+Fails loud if the ``build`` module is unavailable (it is a dev-only
+dependency that MUST be installed in the SDK venv — this gate never skips).
 """
 
 from __future__ import annotations

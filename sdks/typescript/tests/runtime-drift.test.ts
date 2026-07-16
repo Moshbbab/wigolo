@@ -97,8 +97,15 @@ describe.each(tools)('tool %s', (tool) => {
 
   it('(d) manifest response keys are a subset of the 200 schema properties', () => {
     const serverProps = response200Properties(tool);
-    // Only assert the subset when the server documents a 200 schema.
-    if (serverProps.size === 0) return;
+    // The server MUST enumerate 200-response properties for this check to be
+    // meaningful; a missing schema is a drift/regression, not a pass.
+    if (serverProps.size === 0) {
+      expect.fail(
+        `${tool}: server 200 response has no enumerated properties to check ` +
+          `responseKeys against — the OpenAPI 200 schema for ${manifest[tool].path} ` +
+          `is missing or empty (regenerate the server spec).`,
+      );
+    }
     const missing = manifest[tool].responseKeys.filter((k) => !serverProps.has(k));
     expect(missing).toEqual([]);
   });

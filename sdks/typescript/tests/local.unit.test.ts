@@ -142,4 +142,69 @@ createServer((req, res) => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toMatch(/could not be launched|WIGOLO_CLI/i);
   });
+
+  it('spawns the explicit command option (not WIGOLO_CLI/PATH) and reuses its port', async () => {
+    const port = await freePort();
+    const dir = await mkdtemp(join(tmpdir(), 'wigolo-sdk-fake-opt-'));
+    const script = join(dir, 'fake-serve.mjs');
+    await writeFile(
+      script,
+      `import { createServer } from 'node:http';
+const args = process.argv.slice(2);
+const i = args.indexOf('--port');
+const port = Number(args[i + 1]);
+createServer((req, res) => {
+  if (req.url === '/health') { res.writeHead(200); res.end(JSON.stringify({status:'ok'})); return; }
+  if (req.url === '/v1/tools') { res.writeHead(200); res.end(JSON.stringify({tools:[]})); return; }
+  res.writeHead(404); res.end();
+}).listen(port, '127.0.0.1');
+`,
+    );
+    // Point WIGOLO_CLI at a bogus path to prove the option WINS over the env.
+    process.env.WIGOLO_CLI = JSON.stringify(['/definitely/not/here/wigolo']);
+    const local = await createLocalClient({ port, command: [process.execPath, script] });
+    closers.push(() => local.close());
+    expect(local.owned).toBe(true);
+    const res = await fetch(`http://127.0.0.1:${port}/health`);
+    expect(res.status).toBe(200);
+    await local.close();
+    await new Promise((r) => setTimeout(r, 300));
+    await expect(fetch(`http://127.0.0.1:${port}/health`)).rejects.toBeTruthy();
+  });
+});
+
+describe('port validation', () => {
+  it('rejects a non-integer WIGOLO_LOCAL_PORT with trailing garbage', async () => {
+    process.env.WIGOLO_LOCAL_PORT = '3333;x';
+    await expect(createLocalClient()).rejects.toThrow(/WIGOLO_LOCAL_PORT is not a valid port/i);
+  });
+
+  it('rejects an out-of-range port option', async () => {
+    await expect(createLocalClient({ port: 70000 })).rejects.toThrow(/out of range/i);
+    await expect(createLocalClient({ port: 0 })).rejects.toThrow(/out of range/i);
+  });
+});
+
+describe('stderr token redaction', () => {
+  it('redacts the resolved bearer token from a child-exit error tail', async () => {
+    const port = await freePort();
+    const dir = await mkdtemp(join(tmpdir(), 'wigolo-sdk-fake-tok-'));
+    const script = join(dir, 'fake-exit.mjs');
+    // A child that echoes its token to stderr then exits non-zero. Proves the
+    // token never reaches the surfaced error message.
+    await writeFile(
+      script,
+      `process.stderr.write('boot with token=' + (process.env.WIGOLO_API_TOKEN || '') + '\\n');
+process.exit(7);
+`,
+    );
+    process.env.WIGOLO_CLI = JSON.stringify([process.execPath, script]);
+    const secret = 'super-secret-bearer-xyz';
+    const err = (await createLocalClient({ port, token: secret }).catch(
+      (e: unknown) => e,
+    )) as Error;
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).not.toContain(secret);
+    expect(err.message).toContain('[redacted]');
+  });
 });

@@ -12,6 +12,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { WigoloClient, type WigoloClientOptions } from './client.js';
+import { WigoloError } from './errors.js';
 
 const LOOPBACK_HOST = '127.0.0.1';
 const DEFAULT_PORT = 3333;
@@ -57,13 +58,36 @@ function readEnv(name: string): string | undefined {
   }
 }
 
-function resolvePort(opts: CreateLocalClientOptions): number {
-  if (opts.port !== undefined) return opts.port;
-  const envPort = readEnv('WIGOLO_LOCAL_PORT');
-  if (envPort) {
-    const n = Number.parseInt(envPort, 10);
-    if (Number.isFinite(n)) return n;
+/**
+ * Validate a port as an integer in 1–65535. Accepts a number (option) or the
+ * raw env string; rejects trailing garbage like "3333;x" that parseInt would
+ * silently truncate to 3333.
+ */
+function validatePort(value: number | string, source: string): number {
+  let n: number;
+  if (typeof value === 'number') {
+    n = value;
+  } else {
+    // A strict integer string only — no trailing junk, no floats.
+    if (!/^\d+$/.test(value.trim())) {
+      throw new WigoloError(
+        `${source} is not a valid port ("${value}") — set it to an integer between 1 and 65535.`,
+      );
+    }
+    n = Number.parseInt(value.trim(), 10);
   }
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    throw new WigoloError(
+      `${source} is out of range (${n}) — set it to an integer between 1 and 65535.`,
+    );
+  }
+  return n;
+}
+
+function resolvePort(opts: CreateLocalClientOptions): number {
+  if (opts.port !== undefined) return validatePort(opts.port, 'port option');
+  const envPort = readEnv('WIGOLO_LOCAL_PORT');
+  if (envPort) return validatePort(envPort, 'WIGOLO_LOCAL_PORT');
   return DEFAULT_PORT;
 }
 
@@ -194,6 +218,8 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const TASKKILL_WAIT_MS = 2_000;
+
 /** Best-effort tree/plain kill of a child, platform-aware. */
 function killChild(child: ChildProcess, signal: NodeJS.Signals): void {
   if (child.pid === undefined || child.killed) return;
@@ -210,6 +236,38 @@ function killChild(child: ChildProcess, signal: NodeJS.Signals): void {
   } catch {
     /* best effort */
   }
+}
+
+/**
+ * win32-only: spawn taskkill and await its exit (bounded) so a caller's
+ * `close()` does not resolve while the tree-kill is still in flight.
+ */
+async function killChildWindowsAwait(child: ChildProcess): Promise<void> {
+  if (child.pid === undefined || child.killed) return;
+  await new Promise<void>((resolve) => {
+    let done = false;
+    const finish = (): void => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+    let killer: ChildProcess;
+    try {
+      killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
+    } catch {
+      finish();
+      return;
+    }
+    const timer = setTimeout(finish, TASKKILL_WAIT_MS);
+    killer.on('exit', () => {
+      clearTimeout(timer);
+      finish();
+    });
+    killer.on('error', () => {
+      clearTimeout(timer);
+      finish();
+    });
+  });
 }
 
 export async function createLocalClient(opts: CreateLocalClientOptions = {}): Promise<LocalClient> {
@@ -237,7 +295,7 @@ export async function createLocalClient(opts: CreateLocalClientOptions = {}): Pr
   }
 
   // Step 3: connection refused → spawn our own.
-  return spawnLocalDaemon({ base, port, token, makeClient });
+  return spawnLocalDaemon({ base, port, token, makeClient, opts });
 }
 
 interface SpawnArgs {
@@ -245,11 +303,12 @@ interface SpawnArgs {
   port: number;
   token: string | undefined;
   makeClient: () => WigoloClient;
+  opts: CreateLocalClientOptions;
 }
 
 async function spawnLocalDaemon(args: SpawnArgs): Promise<LocalClient> {
-  const { base, port, token, makeClient } = args;
-  const baseCommand = resolveCommand({});
+  const { base, port, token, makeClient, opts } = args;
+  const baseCommand = resolveCommand(opts);
   const serveArgs = ['serve', '--port', String(port), '--host', LOOPBACK_HOST];
 
   // Child env: inherit minus daemon host/port overrides; force the token to
@@ -308,7 +367,7 @@ async function spawnLocalDaemon(args: SpawnArgs): Promise<LocalClient> {
       process.removeListener('exit', exitKillHook);
       if (exited) return;
       if (isWindows) {
-        killChild(child, 'SIGKILL');
+        await killChildWindowsAwait(child);
         return;
       }
       killChild(child, 'SIGTERM');
@@ -333,7 +392,7 @@ async function spawnLocalDaemon(args: SpawnArgs): Promise<LocalClient> {
       }
       process.removeListener('exit', exitKillHook);
       if (spawnErr) throw spawnLaunchError(spawnErr);
-      throw childExitError(port, exitInfo, ring);
+      throw childExitError(port, exitInfo, ring, token);
     }
     const health = await probeHealth(base, token);
     if (health.reachable && health.healthStatus === 200) {
@@ -348,7 +407,7 @@ async function spawnLocalDaemon(args: SpawnArgs): Promise<LocalClient> {
   throw new Error(
     `Local daemon on port ${port} did not become healthy within ${SPAWN_HEALTH_BUDGET_MS}ms. ` +
       `Try running \`wigolo serve --port ${port}\` manually to see the full output.` +
-      stderrTail(ring),
+      stderrTail(ring, token),
   );
 }
 
@@ -368,6 +427,7 @@ function childExitError(
   port: number,
   exitInfo: { code: number | null; signal: NodeJS.Signals | null } | null,
   ring: StderrRing,
+  token: string | undefined,
 ): Error {
   const how = exitInfo?.signal
     ? `signal ${exitInfo.signal}`
@@ -375,11 +435,17 @@ function childExitError(
   return new Error(
     `The local daemon exited before becoming healthy on port ${port} (${how}). ` +
       `Try running \`wigolo serve --port ${port}\` manually to see the full output.` +
-      stderrTail(ring),
+      stderrTail(ring, token),
   );
 }
 
-function stderrTail(ring: StderrRing): string {
-  const tail = ring.text();
+/** Redact every occurrence of the resolved bearer token from a string. */
+function redactToken(text: string, token: string | undefined): string {
+  if (!token) return text;
+  return text.split(token).join('[redacted]');
+}
+
+function stderrTail(ring: StderrRing, token: string | undefined): string {
+  const tail = redactToken(ring.text(), token);
   return tail.length > 0 ? `\n--- daemon stderr (last lines) ---\n${tail}` : '';
 }

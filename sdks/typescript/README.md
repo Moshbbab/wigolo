@@ -54,6 +54,24 @@ try {
 }
 ```
 
+Resolution order for the spawn command is `command` option > `WIGOLO_CLI` env
+> `wigolo` on `PATH`. Port is `port` option > `WIGOLO_LOCAL_PORT` env > 3333.
+
+#### Security notes for embedded mode
+
+- **`WIGOLO_CLI` is an exec-from-env vector.** In embedded mode the SDK spawns
+  the process named by `WIGOLO_CLI` (a JSON argv array, or a single executable
+  path). Anything that can set this env var chooses what binary runs. If you
+  pass the SDK untrusted environments, strip `WIGOLO_CLI` (and
+  `WIGOLO_LOCAL_PORT`) before construction and pass the trusted argv through the
+  explicit `command` option — the option always overrides the env.
+- **Point `command` at the server binary itself, not a wrapper.** On POSIX,
+  forced-kill escalation signals only the direct child. A wrapper like
+  `["npx", "wigolo"]` makes the launcher the direct child, so a hung
+  `close()` can kill the launcher while the real daemon it spawned is orphaned
+  and keeps holding the port. Resolve to the actual `wigolo` executable so
+  `close()` reaches the process that owns the socket.
+
 ## Methods
 
 One method per tool (camelCase), each POSTing its params object verbatim:

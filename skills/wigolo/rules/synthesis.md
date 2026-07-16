@@ -5,7 +5,7 @@ description: How to synthesize answers and reports from wigolo's structured outp
 
 # Synthesis Patterns
 
-Wigolo has no internal LLM — it returns structured evidence. You (the host LLM) write the final answer.
+Wigolo returns structured evidence — you (the host LLM) write the final answer. The synthesis fallback ladder is: host sampling → optional local language model (opt in with `WIGOLO_LOCAL_LLM=auto`, off by default) → deterministic evidence. When neither sampling nor a local language model is available, wigolo hands you the structured evidence and you synthesize.
 
 ## From search evidence (default shape)
 

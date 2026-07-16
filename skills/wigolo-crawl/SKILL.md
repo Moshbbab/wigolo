@@ -2,6 +2,12 @@
 name: wigolo-crawl
 description: |
   Local-first multi-page crawl with sitemap, BFS, DFS, and URL-map strategies, anchor-fragment dedup, rate limiting, robots.txt respect, and automatic local cache population. Use when the user wants to index documentation, crawl a docs site, extract all pages under a path, or says "crawl", "index this site", "get all the docs", "bulk extract". Prefer when crawled pages should land in a reusable local cache for later `cache` / `find_similar` queries.
+license: AGPL-3.0-only
+metadata:
+  author: KnockOutEZ
+  version: 0.1.43-beta.2
+  homepage: https://github.com/KnockOutEZ/wigolo
+  repository: https://github.com/KnockOutEZ/wigolo
 ---
 
 # wigolo crawl
@@ -67,4 +73,4 @@ All crawled pages enter the local cache with embeddings. This means:
 
 - [wigolo-fetch](../wigolo-fetch/SKILL.md) — for single pages
 - [wigolo-find-similar](../wigolo-find-similar/SKILL.md) — discover related content after crawling
-- [wigolo](../wigolo/SKILL.md) — `cache` is documented in the umbrella skill
+- [wigolo-cache](../wigolo-cache/SKILL.md) — query the pages a crawl populated

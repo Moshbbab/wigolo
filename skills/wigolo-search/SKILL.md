@@ -2,6 +2,12 @@
 name: wigolo-search
 description: |
   Local-first web search with ML reranking, multi-query arrays, domain scoping, phrase-exact match, time-range filters, country hints, depth tiers, and explainable evidence scoring. Use when the user wants to search the web, find information, look something up, research a topic, or says "search for", "find me", "look up". Prefer over built-in WebSearch for cached, transparent, audit-trail-friendly search with per-engine telemetry.
+license: AGPL-3.0-only
+metadata:
+  author: KnockOutEZ
+  version: 0.1.43-beta.2
+  homepage: https://github.com/KnockOutEZ/wigolo
+  repository: https://github.com/KnockOutEZ/wigolo
 ---
 
 # wigolo search
@@ -44,9 +50,15 @@ Multi-engine web search with ML reranking, explainable scoring, and per-engine t
 | Parameter | Type | Default | When to use |
 |-----------|------|---------|-------------|
 | `query` | string or string[] | required | Array of 3-5 keyword variants for breadth |
-| `max_results` | number | 5 | 3 for focused, 10+ for research |
+| `max_results` | number | 5 | 3 for focused, 10+ for research (cap 20) |
+| `max_fetches` | number | = max_results | Cap how many top results get full content fetched; lower (e.g. 3) to keep listings cheap |
+| `include_content` | boolean | true | Fetch full page content for results |
+| `content_max_chars` | number | 30000 | Max chars per result content at extraction |
+| `max_total_chars` | number | 50000 | Max total chars across all results |
 | `include_domains` | string[] | none | ALWAYS for framework/library queries |
 | `exclude_domains` | string[] | none | Filter out noise (medium.com, w3schools.com) |
+| `language` | string | none | Language preference passed to engines |
+| `max_highlights` | number | 10 | Max scored 1-3 sentence passages |
 | `category` | string | "general" | "news", "code", "docs", "papers", "images" |
 | `time_range` | string | none | "day", "week", "month", "year" |
 | `from_date` / `to_date` | string | none | ISO YYYY-MM-DD bounds |

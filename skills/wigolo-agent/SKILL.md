@@ -2,6 +2,12 @@
 name: wigolo-agent
 description: |
   Autonomous data gathering across sources — plans search queries and URLs from a natural-language prompt, executes in parallel within a time budget, optionally extracts structured fields via JSON Schema, and synthesizes results with full step transparency. Use when the user needs data collected from the web with a specific shape, says "gather data", "find pricing for", "collect information about", "extract from multiple sites", or provides a JSON schema for web data.
+license: AGPL-3.0-only
+metadata:
+  author: KnockOutEZ
+  version: 0.1.43-beta.2
+  homepage: https://github.com/KnockOutEZ/wigolo
+  repository: https://github.com/KnockOutEZ/wigolo
 ---
 
 # wigolo agent
@@ -50,7 +56,7 @@ Natural-language data gathering with optional JSON Schema output. Local-first: e
 4. **Synthesizes** — produces natural-language result or structured data.
 5. **Reports** — `steps` array shows every action with timings.
 
-Uses MCP sampling when supported; falls back to keyword extraction otherwise.
+Synthesis follows a fallback ladder: host sampling → optional local language model → deterministic extraction.
 
 ## Output Transparency
 

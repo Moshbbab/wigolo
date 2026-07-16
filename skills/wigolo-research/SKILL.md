@@ -2,6 +2,12 @@
 name: wigolo-research
 description: |
   Local-first multi-step research with question decomposition, parallel search, structured briefs, cross-references, and gap analysis. Use when the user needs comprehensive analysis, comparison reports, literature reviews, or says "research", "compare X vs Y", "deep dive", "thorough analysis", "find everything about". Returns a structured `brief` with `topics`, `highlights`, `key_findings`, `sections.overview.cross_references`, `sections.comparison`, `sections.gaps`.
+license: AGPL-3.0-only
+metadata:
+  author: KnockOutEZ
+  version: 0.1.43-beta.2
+  homepage: https://github.com/KnockOutEZ/wigolo
+  repository: https://github.com/KnockOutEZ/wigolo
 ---
 
 # wigolo research
@@ -34,6 +40,8 @@ Comprehensive multi-source research with structured output. Beats chaining `sear
 | `quick` | 2-3 | 5-8 | ~15s | Quick factual check |
 | `standard` | 4-5 | 10-15 | ~40s | Normal research (default) |
 | `comprehensive` | 6-7 | 20-25 | ~80s | Deep comparison, full review |
+
+Override the source count for the chosen depth with `max_sources` (cap 50) — raise it to widen coverage, lower it to keep a run fast.
 
 ## Output: Structured Brief
 

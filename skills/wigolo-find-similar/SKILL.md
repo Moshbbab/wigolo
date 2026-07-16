@@ -1,7 +1,13 @@
 ---
 name: wigolo-find-similar
 description: |
-  Hybrid semantic discovery — fuses embeddings + keyword (FTS5) + live web search via 3-way Reciprocal Rank Fusion. Use when the user has a good source and wants more like it, says "find similar", "related pages", "more like this", or wants to discover content related to a known URL or concept. Works best after a `crawl` or several `fetch` calls have warmed the local cache. Emits `cold_start` when local signals are weak.
+  Hybrid semantic discovery — fuses embeddings + keyword search + live web search via 3-way Reciprocal Rank Fusion. Use when the user has a good source and wants more like it, says "find similar", "related pages", "more like this", or wants to discover content related to a known URL or concept. Works best after a `crawl` or several `fetch` calls have warmed the local cache. Emits `cold_start` when local signals are weak.
+license: AGPL-3.0-only
+metadata:
+  author: KnockOutEZ
+  version: 0.1.43-beta.2
+  homepage: https://github.com/KnockOutEZ/wigolo
+  repository: https://github.com/KnockOutEZ/wigolo
 ---
 
 # wigolo find_similar
@@ -35,7 +41,9 @@ Hybrid semantic discovery: semantic embeddings + keyword search + web search, fu
 | `exclude_domains` | string[] | none | Filter out domains |
 | `include_cache` | boolean | true | Search local cache (fast, free) |
 | `include_web` | boolean | true | Web fallback when cache is sparse |
-| `threshold` | number | 0.5 | Minimum fused score (0-1) |
+| `mode` | string | "auto" | "auto", "cache", "web-expansion", "crawl-rank" |
+| `threshold` | number | 0 | Hard post-filter on the raw fused score; 0 = no filtering. Filters `match_signals.fused_score`, not the normalized `relevance_score` |
+| `include_ranking_debug` | boolean | false | Attach per-result `ranking_debug` with the raw ranks |
 | `max_tokens_out` | number | none | Token-budget cap (cl100k-base) |
 | `include_full_markdown` | boolean | false | Restore full body alongside evidence |
 | `citation_format` | string | "numbered" | "numbered" / "json" / "anthropic_tags" |
@@ -48,7 +56,14 @@ Provide either `url` or `concept` (not both).
 2. Searches local cache via embedding similarity + keyword matching.
 3. Falls back to web search if local hits are sparse.
 4. Fuses all signals via 3-way Reciprocal Rank Fusion (RRF).
-5. Returns ranked results with `match_signals` (`embedding_rank`, `fts5_rank`, `fused_score`).
+5. Returns ranked results. Each carries `match_signals` with the `fused_score`. Set `include_ranking_debug: true` to also attach a per-result `ranking_debug` object exposing the individual source ranks (`fts5_rank`, `embedding_rank`, `web_rank`, `rrf_score`) so you can audit disagreement between the three ranking sources.
+
+## Modes
+
+- **`auto`** (default) — pick the strategy from available signals.
+- **`cache`** — local hybrid only (keyword + semantic over the cache).
+- **`web-expansion`** — derive key terms and expand via web search.
+- **`crawl-rank`** — 1-hop crawl from the seed URL, embed, and cosine-rank the neighbours.
 
 ## Cold-Start Signal
 

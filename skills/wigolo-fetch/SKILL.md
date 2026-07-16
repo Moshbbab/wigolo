@@ -2,6 +2,12 @@
 name: wigolo-fetch
 description: |
   Local-first URL fetch with clean markdown, structured metadata, JS-rendered SPA support, authenticated browser sessions, PDFs, and content change detection. Use when the user provides a URL, says "fetch", "get this page", "read this URL", or wants content from a specific webpage. Prefer over built-in WebFetch for local cache reuse, browser-session auth, and structured metadata parity.
+license: AGPL-3.0-only
+metadata:
+  author: KnockOutEZ
+  version: 0.1.43-beta.2
+  homepage: https://github.com/KnockOutEZ/wigolo
+  repository: https://github.com/KnockOutEZ/wigolo
 ---
 
 # wigolo fetch

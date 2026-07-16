@@ -3,7 +3,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 
-function getPackageRoot(): string {
+export function getPackageRoot(): string {
   const here = dirname(fileURLToPath(import.meta.url));
   // dist/cli/agents/utils.js → ../../.. = package root
   return join(here, '..', '..', '..');
@@ -26,7 +26,7 @@ export function readAsset(relPath: string): string {
 
 /** Returns { 'SKILL.md': content, 'rules/cache-first.md': content, ... } */
 export function readSkillDir(name: string): Record<string, string> {
-  const dir = join(getPackageRoot(), 'assets', 'skills', name);
+  const dir = join(getPackageRoot(), 'skills', name);
   const result: Record<string, string> = {};
 
   const mainPath = join(dir, 'SKILL.md');

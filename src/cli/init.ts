@@ -37,21 +37,26 @@ const PRECACHE_HINT =
 const INIT_USAGE = [
   'Usage: wigolo init [options]',
   '',
-  'Sets up wigolo: detects and wires your agents, persists settings, and by',
-  'default performs a COMPLETE setup — downloads the browser engine + on-device',
-  'models, verifies them, and prints a per-component report so failures surface',
-  'loudly. Pass --no-warmup to skip all downloads (components then lazy-load on',
-  'first use).',
+  'Sets up wigolo: wires the agents you name, persists settings, and by default',
+  'performs a COMPLETE setup — downloads the browser engine + on-device models,',
+  'verifies them, and prints a per-component report so failures surface loudly.',
+  'Pass --no-warmup to skip all downloads (components then lazy-load on first use).',
   '',
-  'By default init uses the plain text flow. Pass --wizard to launch the',
-  'interactive setup wizard (requires a terminal).',
+  'Three modes (default is UNATTENDED):',
+  '  * default       unattended — no prompts, safe in scripts and CI with no',
+  '                  terminal. Name agents with --agents=<csv>; omit to set up',
+  '                  the engine only.',
+  '  * --interactive plain-text prompt flow (agent picker + optional onboarding',
+  '                  questions). Needs a real terminal.',
+  '  * --wizard      the rich guided setup TUI. Needs a real terminal.',
   '',
   'Options:',
-  '  --wizard                Launch the interactive setup wizard (Ink TUI)',
+  '  --interactive           Plain-text prompt flow (needs a terminal)',
+  '  --wizard                Rich guided setup wizard TUI (needs a terminal)',
   '  --no-warmup             Skip ALL component downloads (lazy-load on first use)',
   '  --warmup                Explicit-on alias (full setup is the default; no-op)',
   '  --json                  Emit a machine-readable JSON summary on stdout',
-  '  --non-interactive, -y   Skip interactive prompts (uses plain text flow)',
+  '  --non-interactive, -y   Accepted no-op — unattended is now the default',
   '  --agents=<csv>          Comma-separated agent ids to auto-wire (optional; omit to set up the engine only and point any MCP client at wigolo yourself)',
   '  --skip-verify           Skip the post-install verify step',
   '  --plain                 Force plain (non-TUI) output',
@@ -264,24 +269,44 @@ export async function runInit(args: string[]): Promise<number> {
     process.env.CI === 'true' ||
     process.env.CI === '1' ||
     process.env.GITHUB_ACTIONS === 'true';
-  // Headless-first (D8): the plain path is the default on TTY and non-TTY alike.
-  // Ink mounts ONLY under an explicit --wizard flag (and never in --plain /
-  // --non-interactive / CI / non-TTY contexts, which can't host it).
-  const useInk = flags.wizard && !flags.plain && !flags.nonInteractive && isTTY && !isCI;
+
+  // Three modes; only the DEFAULT changed. Unattended is now the default:
+  // init NEVER prompts unless the user explicitly opts into one of the two
+  // interactive modes.
+  //   * --wizard      → the rich guided Ink TUI (runInitWizard).
+  //   * --interactive → the plain-text prompt flow (agent-picker + optional
+  //                     onboarding questions), handled inside runInitPlain.
+  //   * neither       → fully unattended (no stdin prompts, ever).
+  // --plain forces the non-TUI output flow and so opts back out of the Ink
+  // wizard, degrading to the unattended default (NOT the plain-text prompts —
+  // --plain never conjures prompts the user did not ask for with --interactive).
+  const wantsWizard = flags.wizard && !flags.plain;
+  const wantsAnyInteractive = wantsWizard || flags.interactive;
+
+  // Either interactive mode requires a real terminal. Rather than silently
+  // degrading to the unattended flow (which would surprise a user who asked to
+  // interact), fail loudly on a non-TTY / CI so the contradiction is obvious.
+  if (wantsAnyInteractive && (!isTTY || isCI)) {
+    process.stderr.write(
+      '--wizard/--interactive needs an interactive terminal; omit it for unattended setup.\n',
+    );
+    return 2;
+  }
 
   // The Ink TUI stack cannot boot inside the standalone binary (dependency-level
-  // top-level await). Headless-first: surface the actionable fallback and route
-  // to the fully-headless plain flow instead of crashing on an ESM-TLA require.
-  if (useInk && isPackagedBinary()) {
+  // top-level await). Surface the actionable fallback and route to the plain
+  // flow (still honouring the plain-text prompts) instead of crashing.
+  if (wantsWizard && isPackagedBinary()) {
     process.stderr.write(`${BINARY_TUI_UNAVAILABLE_MESSAGE}\n`);
     return runInitPlain(flags);
   }
 
-  if (useInk) {
+  if (wantsWizard) {
     return runInitWizard(flags);
   }
 
-  // Plain / non-interactive mode — use the existing text-based flow
+  // Default (unattended) OR --interactive (plain-text prompts). runInitPlain
+  // reads flags.interactive to decide whether to prompt.
   return runInitPlain(flags);
 }
 
@@ -413,6 +438,7 @@ interface InitFlagsResolved {
   skipVerify: boolean;
   plain: boolean;
   help: boolean;
+  interactive: boolean;
   wizard: boolean;
   warmup: boolean;
   json: boolean;
@@ -510,33 +536,37 @@ async function runInitPlain(flags: InitFlagsResolved): Promise<number> {
     return 1;
   }
 
+  // Unattended-by-default: agent wiring comes from --agents and the path NEVER
+  // prompts. The plain-text agent-picker prompt runs ONLY under --interactive
+  // (its own opt-in interactive mode, distinct from the Ink --wizard). An empty
+  // agent list is a valid choice in the unattended path: warmup above has
+  // already set up the engine, so we skip agent wiring and let a user whose
+  // agent has no built-in installer point it at wigolo's MCP server by hand
+  // (the engine-ready hint below).
   let selected: AgentId[];
-  if (flags.nonInteractive) {
-    selected = [...flags.agents] as AgentId[];
-  } else {
+  if (flags.interactive) {
     const { selectAgents, NotTtyError } = await import('./tui/select-agents.js');
     try {
       selected = await selectAgents(detected);
     } catch (err) {
       if (err instanceof NotTtyError) {
-        process.stderr.write('init requires an interactive terminal.\n');
-        process.stderr.write('Use --non-interactive --agents=<comma-list> in scripts or CI.\n');
+        process.stderr.write(
+          '--wizard/--interactive needs an interactive terminal; omit it for unattended setup.\n',
+        );
         return 2;
       }
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`Selection failed: ${message}\n`);
       return 1;
     }
-  }
-
-  // In non-interactive mode an empty agent list is a valid choice: warmup above
-  // has already set up the engine (on-device models, browser, cache), so we skip
-  // agent wiring and let a user whose agent has no built-in installer point it at
-  // wigolo's MCP server by hand. In interactive mode an empty selection means the
-  // user picked nothing, so there is genuinely nothing left to do.
-  if (selected.length === 0 && !flags.nonInteractive) {
-    process.stderr.write('No agents selected — nothing to do.\n');
-    return 0;
+    // In the interactive picker an empty selection means the user chose
+    // nothing, so there is genuinely nothing left to wire.
+    if (selected.length === 0) {
+      process.stderr.write('No agents selected — nothing to do.\n');
+      return 0;
+    }
+  } else {
+    selected = [...flags.agents] as AgentId[];
   }
 
   const config = getConfig();
@@ -596,10 +626,12 @@ async function runInitPlain(flags: InitFlagsResolved): Promise<number> {
     lastInit: new Date().toISOString(),
   });
 
-  // Optional onboarding: pick search engine, RSS feeds, LLM endpoint.
-  // Defaults are skip-everything, so non-interactive and "just hit Enter"
-  // users land in exactly the prior behaviour.
-  if (!flags.nonInteractive) {
+  // Optional onboarding prompts (search engine / RSS feeds / LLM endpoint) run
+  // ONLY under --interactive. The unattended default never prompts; non-secret
+  // provider/search selection and the LLM key stay configurable headlessly via
+  // --provider / --search / WIGOLO_LLM_API_KEY below. Each prompt defaults to
+  // "skip", so hitting Enter past them matches the prior interactive behaviour.
+  if (flags.interactive) {
     try {
       const { promptExtras } = await import('./tui/extras-prompt.js');
       await promptExtras(config.dataDir);
@@ -674,11 +706,12 @@ async function runInitPlain(flags: InitFlagsResolved): Promise<number> {
   // write), and the probe can return the stale backend written before this run.
   const { resetPersistedConfig } = await import('../persisted-config.js');
   resetPersistedConfig();
-  // Engine-only mode = non-interactive with no `--agents` given. Registering no
-  // agent is then a deliberate choice, not a setup failure. In interactive mode
-  // the user always passes through the agent-selection step, so agents ARE
-  // requested. `agentsRequested` decides whether an empty agent list fails setup.
-  const agentsRequested = !(flags.nonInteractive && flags.agents.length === 0);
+  // Engine-only mode = the unattended default with no `--agents` given.
+  // Registering no agent is then a deliberate choice, not a setup failure. In
+  // --interactive mode the user passes through the agent-picker step, so agents
+  // ARE requested. `agentsRequested` decides whether an empty agent list fails
+  // setup.
+  const agentsRequested = flags.interactive || flags.agents.length > 0;
   const statuses = await probeSetupStatus(defaultProbeDeps(), { agentsRequested });
   const summary = summarizeSetup(statuses);
   out();

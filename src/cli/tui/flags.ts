@@ -18,6 +18,7 @@ const INIT_KNOWN = new Set([
   '--provider',
   '--search',
   '--wizard',
+  '--interactive',
   '--warmup',
   '--no-warmup',
   '--json',
@@ -142,9 +143,10 @@ function parseCommon(args: readonly string[], known: ReadonlySet<string>): Raw {
 const VALID_PROVIDERS = ['anthropic', 'openai', 'gemini', 'ollama'] as const;
 const VALID_SEARCH_BACKENDS = ['core', 'searxng', 'hybrid'] as const;
 
-function parseInitOnlyFlags(args: readonly string[]): { provider?: string; search?: string; wizard: boolean; warmup: boolean } {
+function parseInitOnlyFlags(args: readonly string[]): { provider?: string; search?: string; interactive: boolean; wizard: boolean; warmup: boolean } {
   let provider: string | undefined;
   let search: string | undefined;
+  let interactive = false;
   let wizard = false;
   // Full setup is the DEFAULT: a manual init downloads every component so
   // failures surface loudly. `--no-warmup` is the download-nothing escape hatch;
@@ -159,6 +161,13 @@ function parseInitOnlyFlags(args: readonly string[]): { provider?: string; searc
 
     if (token === '--wizard') {
       wizard = true;
+      i++;
+      continue;
+    }
+
+    // The plain-text prompt mode — distinct from the Ink --wizard.
+    if (token === '--interactive') {
+      interactive = true;
       i++;
       continue;
     }
@@ -236,18 +245,19 @@ function parseInitOnlyFlags(args: readonly string[]): { provider?: string; searc
     i++;
   }
 
-  return { provider, search, wizard, warmup };
+  return { provider, search, interactive, wizard, warmup };
 }
 
 export function parseInitFlags(args: readonly string[]): InitFlags {
   const raw = parseCommon(args, INIT_KNOWN);
-  const { provider, search, wizard, warmup } = parseInitOnlyFlags(args);
+  const { provider, search, interactive, wizard, warmup } = parseInitOnlyFlags(args);
   return {
     nonInteractive: raw.nonInteractive,
     agents: raw.agents,
     skipVerify: raw.skipVerify,
     plain: raw.plain,
     help: raw.help,
+    interactive,
     wizard,
     warmup,
     json: raw.json,

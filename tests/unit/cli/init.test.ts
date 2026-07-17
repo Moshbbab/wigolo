@@ -16,6 +16,7 @@ const {
   saveInitConfigMock,
   installSkillsMock,
   readInitConfigMock,
+  promptExtrasMock,
 } = vi.hoisted(() => ({
   runSystemCheckMock: vi.fn(),
   renderBannerMock: vi.fn(() => 'BANNER\n'),
@@ -32,6 +33,7 @@ const {
   saveInitConfigMock: vi.fn(),
   installSkillsMock: vi.fn(() => ({ written: [], removed: [], refused: [], notices: [] })),
   readInitConfigMock: vi.fn(() => ({})),
+  promptExtrasMock: vi.fn(async () => ({})),
 }));
 
 vi.mock('../../../src/cli/tui/system-check.js', () => ({
@@ -84,6 +86,9 @@ vi.mock('../../../src/cli/config.js', () => ({
 }));
 vi.mock('../../../src/cli/tui/state/uninstall-signal.js', () => ({
   wasUninstalled: wasUninstalledMock,
+}));
+vi.mock('../../../src/cli/tui/extras-prompt.js', () => ({
+  promptExtras: promptExtrasMock,
 }));
 vi.mock('../../../src/cli/tui/reporter-auto.js', () => ({
   autoReporter: vi.fn(() => ({
@@ -151,6 +156,7 @@ describe('runInit', () => {
     getPackageVersionMock.mockReturnValue('0.6.3');
     installSkillsMock.mockReturnValue({ written: [], removed: [], refused: [], notices: [] });
     readInitConfigMock.mockReturnValue({});
+    promptExtrasMock.mockResolvedValue({});
     runDoctorColdChecksMock.mockReturnValue([
       { name: 'browser', status: 'ok', fixable: true, detail: 'chromium launchable' },
       { name: 'data-dir', status: 'ok', fixable: false, detail: 'writable (/tmp/data)' },
@@ -624,15 +630,34 @@ describe('runInit', () => {
       }
     });
 
-    it('--wizard in a non-TTY context falls back to plain (Ink cannot mount)', async () => {
-      // Ink requires a real terminal; --wizard on a non-TTY must NOT try to mount
-      // and must NOT call runConfig — it degrades to the plain path.
+    it('--wizard in a non-TTY context errors clearly (does NOT silently fall back)', async () => {
+      // Ink requires a real terminal. A user who explicitly asked for the guided
+      // wizard on a non-TTY must get a clear error (exit 2) — not a silent
+      // downgrade to the unattended flow. It must NOT mount Ink (no runConfig)
+      // and must NOT run the plain setup (no warmup).
       Object.defineProperty(process.stdout, 'isTTY', { value: false, configurable: true });
       primeHappyPath();
       const cap = capture();
       try {
-        await runInit(['--wizard', '--non-interactive', '--agents=cursor', '--skip-verify']);
+        const code = await runInit(['--wizard', '--agents=cursor', '--skip-verify']);
+        expect(code).toBe(2);
         expect(runConfigMock).not.toHaveBeenCalled();
+        expect(runWarmupMock).not.toHaveBeenCalled();
+        expect(cap.stderr.join('')).toMatch(/--wizard\/--interactive needs an interactive terminal/i);
+      } finally {
+        cap.restore();
+      }
+    });
+
+    it('--interactive in a non-TTY context errors clearly (alias of --wizard)', async () => {
+      Object.defineProperty(process.stdout, 'isTTY', { value: false, configurable: true });
+      primeHappyPath();
+      const cap = capture();
+      try {
+        const code = await runInit(['--interactive', '--agents=cursor']);
+        expect(code).toBe(2);
+        expect(runConfigMock).not.toHaveBeenCalled();
+        expect(cap.stderr.join('')).toMatch(/needs an interactive terminal/i);
       } finally {
         cap.restore();
       }
@@ -756,6 +781,143 @@ describe('runInit', () => {
         await runInit([]);
         expect(runWarmupMock).toHaveBeenCalledTimes(1);
         expect(runWarmupMock.mock.calls[0]?.[0]).toEqual(['--all']);
+      } finally {
+        cap.restore();
+      }
+    });
+  });
+
+  describe('unattended-by-default: no prompts on the default path', () => {
+    let prevTTY: boolean | undefined;
+    let prevCI: string | undefined;
+    let prevGha: string | undefined;
+
+    beforeEach(() => {
+      prevTTY = process.stdout.isTTY;
+      prevCI = process.env.CI;
+      prevGha = process.env.GITHUB_ACTIONS;
+      // A real terminal — proving the default STILL does not prompt even when a
+      // TTY is available (the footgun is that init used to prompt here).
+      Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+      delete process.env.CI;
+      delete process.env.GITHUB_ACTIONS;
+      runConfigMock.mockResolvedValue(0);
+      runWarmupMock.mockResolvedValue({ playwright: 'ok', searxng: 'skipped', embeddings: 'ok', reranker: 'ok' });
+      wasUninstalledMock.mockReturnValue(false);
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process.stdout, 'isTTY', { value: prevTTY, configurable: true });
+      if (prevCI === undefined) delete process.env.CI; else process.env.CI = prevCI;
+      if (prevGha === undefined) delete process.env.GITHUB_ACTIONS; else process.env.GITHUB_ACTIONS = prevGha;
+    });
+
+    it('(a) default init --agents=cursor wires the agent WITHOUT any prompt call, exit 0', async () => {
+      primeHappyPath();
+      const cap = capture();
+      try {
+        const code = await runInit(['--agents=cursor', '--skip-verify']);
+        expect(code).toBe(0);
+        // The agent is wired from --agents...
+        expect(applyConfigsMock).toHaveBeenCalledTimes(1);
+        expect(applyConfigsMock.mock.calls[0]?.[1]).toEqual(['cursor']);
+        // ...and NEITHER prompt path was ever reached.
+        expect(selectAgentsMock).not.toHaveBeenCalled();
+        expect(promptExtrasMock).not.toHaveBeenCalled();
+      } finally {
+        cap.restore();
+      }
+    });
+
+    it('(b) default init with NO --agents = engine-only + hint, no prompt, exit 0', async () => {
+      primeHappyPath();
+      const cap = capture();
+      try {
+        const code = await runInit(['--skip-verify']);
+        expect(code).toBe(0);
+        expect(applyConfigsMock).not.toHaveBeenCalled();
+        expect(selectAgentsMock).not.toHaveBeenCalled();
+        expect(promptExtrasMock).not.toHaveBeenCalled();
+        const out = cap.stdout.join('');
+        expect(out).toMatch(/Engine ready — no agent wiring requested/);
+        expect(out).toMatch(/npx wigolo mcp/);
+      } finally {
+        cap.restore();
+      }
+    });
+
+    it('(e) --non-interactive is an accepted NO-OP — identical to the default', async () => {
+      primeHappyPath();
+      const cap = capture();
+      try {
+        const code = await runInit(['--non-interactive', '--agents=cursor', '--skip-verify']);
+        expect(code).toBe(0);
+        expect(applyConfigsMock).toHaveBeenCalledTimes(1);
+        expect(applyConfigsMock.mock.calls[0]?.[1]).toEqual(['cursor']);
+        // Still no prompt — the default already never prompts.
+        expect(selectAgentsMock).not.toHaveBeenCalled();
+        expect(promptExtrasMock).not.toHaveBeenCalled();
+      } finally {
+        cap.restore();
+      }
+    });
+
+    it('(f) --interactive runs the PLAIN-TEXT prompt flow, NOT the Ink wizard', async () => {
+      // --interactive is its own mode: the plain-text agent-picker prompt +
+      // promptExtras. It must NOT mount the Ink wizard (no runConfig) and it
+      // MUST exercise the plain-text prompt path.
+      primeHappyPath();
+      selectAgentsMock.mockResolvedValue(['cursor']);
+      const cap = capture();
+      try {
+        const code = await runInit(['--interactive']);
+        expect(code).toBe(0);
+        expect(runConfigMock).not.toHaveBeenCalled();
+        expect(selectAgentsMock).toHaveBeenCalledTimes(1);
+        expect(promptExtrasMock).toHaveBeenCalledTimes(1);
+        // The agent chosen at the prompt is what gets wired.
+        expect(applyConfigsMock.mock.calls[0]?.[1]).toEqual(['cursor']);
+      } finally {
+        cap.restore();
+      }
+    });
+
+    it('--interactive with an empty picker selection stops with "nothing to do", exit 0', async () => {
+      primeHappyPath();
+      selectAgentsMock.mockResolvedValue([]);
+      const cap = capture();
+      try {
+        const code = await runInit(['--interactive']);
+        expect(code).toBe(0);
+        expect(applyConfigsMock).not.toHaveBeenCalled();
+        expect(cap.stderr.join('')).toMatch(/No agents selected — nothing to do/);
+      } finally {
+        cap.restore();
+      }
+    });
+
+    it('--wizard + --non-interactive: --wizard wins (explicit interactive request)', async () => {
+      const cap = capture();
+      try {
+        const code = await runInit(['--wizard', '--non-interactive']);
+        expect(code).toBe(0);
+        // Wizard path (Ink) was taken despite the no-op --non-interactive.
+        expect(runConfigMock).toHaveBeenCalledTimes(1);
+        expect(runConfigMock.mock.calls[0]?.[0]).toEqual(['--force-wizard']);
+      } finally {
+        cap.restore();
+      }
+    });
+
+    it('--wizard + --plain opts back out of the wizard (plain wins, no prompt)', async () => {
+      primeHappyPath();
+      const cap = capture();
+      try {
+        const code = await runInit(['--wizard', '--plain', '--agents=cursor', '--skip-verify']);
+        expect(code).toBe(0);
+        expect(runConfigMock).not.toHaveBeenCalled();
+        expect(selectAgentsMock).not.toHaveBeenCalled();
+        expect(promptExtrasMock).not.toHaveBeenCalled();
       } finally {
         cap.restore();
       }

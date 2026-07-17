@@ -46,7 +46,7 @@ wigolo went public in early July 2026. It found its audience fast — **most of 
 
 Requires **Node ≥ 20** and ~1.5 GB of free disk. macOS, Linux, and Windows.
 
-One command wires the local engine into your agent and sets up the MCP connection. It runs headlessly with no prompts — components (the browser engine and on-device models) download automatically on first use, so init itself is instant and downloads nothing:
+One command wires the local engine into your agent and sets up the MCP connection. It runs headlessly with no prompts. `init` does the **complete setup** — it downloads the browser engine and on-device models, runs a health check, and prints a clear per-component summary — so any setup problem surfaces right here, not silently on your agent's first call:
 
 ```bash
 npx wigolo init --non-interactive --agents=<your-agent>
@@ -54,7 +54,9 @@ npx wigolo init --non-interactive --agents=<your-agent>
 
 - **`<your-agent>`** — one or more of `claude-code` · `cursor` · `codex` · `gemini-cli` · `vscode` · `windsurf` · `zed` · `antigravity` (comma-separated). wigolo writes the MCP config and instructions for you — nothing else to set up.
 - **Any other MCP-capable agent?** Omit `--agents` — init still runs headlessly, and you point your agent at wigolo's MCP server (`npx wigolo mcp`) yourself.
-- **Want the components ahead of time?** Add `--warmup` to pre-cache the browser engine and on-device models during init instead of on first use, or run `npx wigolo warmup --all` anytime. **Prefer a guided setup?** Add `--wizard` for the interactive terminal wizard.
+- **Skipping `init`?** You can wire the MCP server directly (below) without ever running `init` — the browser engine and models then download automatically on first use.
+- **Fast / offline / CI setup?** Add `--no-warmup` to skip the downloads (components lazy-load on first use instead). **Prefer a guided setup?** Add `--wizard` for the interactive terminal wizard.
+- A component download failing (offline, disk, network block) never fails the setup: `init` reports what's not ready with the exact fix and still wires your agent — the component retries on first use.
 
 That's the whole setup — **search, fetch, crawl, extract, cache, and find-similar work with no API key.** Check it's healthy:
 
@@ -69,7 +71,7 @@ Not for you? `npx wigolo config --uninstall --yes` removes everything, cleanly.
 The `--agents` flag has a built-in installer for each agent listed above — but it can't cover every agent in the world. For **anything else — your own custom or in-house agent, or any MCP-capable client we don't wire automatically yet** — set wigolo up by hand: it's just another MCP server. Install the engine once, then register it:
 
 ```bash
-npx wigolo init --non-interactive        # headless setup, no agent wiring (components download on first use)
+npx wigolo init --non-interactive        # headless full setup, no agent wiring (add --no-warmup to defer downloads)
 ```
 
 Most clients use an `mcpServers` block in a JSON config file:
@@ -332,7 +334,7 @@ Pick the channel that matches how you run things, then wire the MCP command from
 
 **One channel at a time.** All channels share one data directory (`~/.wigolo` by default, `/data` in Docker). Running two different wigolo versions against the same data dir is undefined — pick one channel per machine and let it own the data dir.
 
-**First-use downloads (every channel).** A fresh install is instant and downloads nothing. The embedding model and the browser engine binary download **on first use** into the data dir — a one-time few-hundred-MB download. To pre-cache them ahead of time, run `wigolo warmup --all` (or add `--warmup` to `init`).
+**Component downloads (every channel).** A fresh package install pulls nothing extra on its own. Running `wigolo init` downloads the browser engine binary and the on-device models up front (a one-time few-hundred-MB download) and verifies them; if you skip `init` — or pass `init --no-warmup` — they download lazily **on first use** into the data dir instead. `wigolo warmup --all` pre-caches them anytime.
 
 ### Channel caveats
 
@@ -538,7 +540,7 @@ For repeated interactive use, run `wigolo serve` so the browser pool, embeddings
 |---------|--------------|
 | `wigolo` / `wigolo mcp` | Start the MCP stdio server (the default command). |
 | `wigolo <tool> <args>` | Run any tool once, headlessly — `search`, `fetch`, `crawl`, `extract`, `cache`, `find-similar`, `research`, `agent`, `diff`, `watch`. Add `--json` for machine-readable output (results on stdout, logs on stderr, exit code 0/1); `--help` on each tool lists its flags. Example: `wigolo search "rust async runtimes" --limit 5 --json`. |
-| `wigolo init` | Set up wigolo headlessly: wire into detected agents, persist settings (components download on first use). `--non-interactive --agents=<csv> --provider=<name> --search=<backend>` for CI; `--warmup` to pre-cache components; `--wizard` for the interactive TUI; `--json` for a machine-readable summary. |
+| `wigolo init` | Full headless setup: wire into detected agents, persist settings, download the browser engine + models, run a health check, and print a per-component summary (so failures surface at setup, not on first agent call). `--non-interactive --agents=<csv> --provider=<name> --search=<backend>` for CI; `--no-warmup` to skip the downloads (lazy first-use instead); `--wizard` for the interactive TUI; `--json` for a machine-readable summary (components + doctor). |
 | `wigolo setup mcp` | Re-write just the MCP server entries, without the full wizard (`--json`). |
 | `wigolo doctor` | Cold-start health check — no network fetches. `--fix` auto-repairs known failures (re-download missing models, install the browser engine, clear stale sidecar state, reset engine breakers — including on a running daemon); `--json` for a machine-readable report. |
 | `wigolo verify` | End-to-end smoke test (fetch, crawl, extract, search, rerank, embed) (`--json`). |

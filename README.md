@@ -7,6 +7,7 @@ Local-first web intelligence over MCP — **no keys, no cloud, no metered bill.*
 <sub>works with&nbsp;&nbsp;**Claude Code · Cursor · Codex · Gemini CLI · VS Code · Windsurf · Zed · Antigravity**</sub>
 
 [![npm](https://img.shields.io/npm/v/wigolo?color=cb3837&logo=npm)](https://www.npmjs.com/package/wigolo)
+[![GitHub stars](https://img.shields.io/github/stars/KnockOutEZ/wigolo?style=flat&logo=github&color=e3b341)](https://github.com/KnockOutEZ/wigolo/stargazers)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![MCP](https://img.shields.io/badge/MCP-server-7c3aed)](https://modelcontextprotocol.io)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-2563eb)](#license)
@@ -23,6 +24,21 @@ wigolo runs on your machine as an MCP server and gives an AI coding agent one du
 <div align="center">
 
 <img alt="wigolo demo — Claude Code answering a live web question through wigolo, no API keys" src="assets/wigolo-demo.gif" width="800">
+
+</div>
+
+## Momentum
+
+wigolo went public in early July 2026. It found its audience fast — **most of the stars below landed in a single 48-hour window.**
+
+<div align="center">
+
+<picture>
+<source media="(prefers-color-scheme: dark)" srcset="assets/promo/stars-dark.svg">
+<img alt="wigolo GitHub star growth — a flat line through mid-July, then a sharp climb as the project found its audience over one 48-hour window" src="assets/promo/stars.svg" width="880">
+</picture>
+
+<sub>Chart generated from the public GitHub star timeline. If it's still climbing when you read this, that's the point — <a href="https://github.com/KnockOutEZ/wigolo">add a ⭐</a>.</sub>
 
 </div>
 
@@ -331,6 +347,19 @@ Thin, typed clients for the [REST API](#rest-api--self-host) live in this repo �
 
 **Package names are pending and nothing is published yet** — until then, build and install from this repo: each SDK's README (`sdks/typescript/README.md`, `sdks/python/README.md`) has the pack/build install line and a runnable quickstart. Both SDKs are contract-locked to the server's live `/openapi.json` by drift tests (`npm run test:sdk:ts`, `npm run test:sdk:py`).
 
+## Framework integrations
+
+Drop wigolo's tools into the agent framework you already use — opt-in wrappers live in [`packages/`](packages/), each thin over the MCP server or the SDKs, so the full ten-tool surface (including cache, find_similar, research, and agent — the four most frameworks' web tools don't have) comes along.
+
+| Framework | Package | What you get |
+|-----------|---------|--------------|
+| **LangChain** | `packages/langchain-wigolo` | Each tool as a LangChain `BaseTool`, plus a `BaseRetriever` backed by search/find_similar for RAG chains. |
+| **CrewAI** | `packages/crewai-wigolo` | wigolo tools as CrewAI `BaseTool`s via `wigolo_tools()`, ready to hand to any crew. |
+| **LlamaIndex** | `packages/llama-index-readers-wigolo` | A `BaseReader` that loads fetched / crawled / searched pages as LlamaIndex documents. |
+| **Vercel AI SDK** | `packages/wigolo-ai-sdk` | Tool factories for `generateText` / `streamText` `tools`, edge-friendly. |
+
+Each package is pre-release (names pending, nothing published yet); build from the repo and see its own README for the import-and-call quickstart. They're opt-in extras — the core MCP server never depends on any framework.
+
 ## Tools
 
 | Tool | What it does |
@@ -461,7 +490,8 @@ flowchart TD
 
 - **Code beats model.** Deterministic work — canonicalization, rank fusion, dedup, schema matching, hashing — never touches an LLM. The model is reserved for judgment, opt-in, and capped per request. LLM-filled fields are checked against the source and nulled if absent, so hallucinations don't reach your output.
 - **Routing on observable signals.** The fetch ladder escalates to a real browser on what it *sees* — SPA markers, challenge bodies, thin content — not domain guesses. It learns per-domain and unlearns when a site stops needing it.
-- **Transparent, honest results.** Every result carries a score breakdown and a query-understanding block; degraded state is always surfaced, never hidden.
+- **Gets past most bot walls, keyless — and says so when it can't.** The ladder runs UA rotation on a bare `403`, TLS-fingerprint impersonation, a hardened headless browser, and it waits out interstitial challenges to capture the clearance cookie and reuse it per-domain. That clears the common JS-challenge sites with no keys and no third party. The honest ceiling: managed-challenge networks with IP reputation scoring (think the strictest job-board and review sites) still won't hand a datacenter or fresh residential IP a clearance — for those you opt into a proxy, a challenge-solver sidecar, or a hosted reader (all off by default). When a page stays blocked, wigolo returns a labeled `blocked_by_challenge` failure — never a challenge shell dressed up as content.
+- **Transparent, honest results.** Every result carries a score breakdown and a query-understanding block; degraded state is always surfaced, never hidden. wigolo self-tunes which fetch tier to try first per domain; `wigolo tune list` shows what it learned and `wigolo tune reset` clears it.
 
 <div align="center">
 
@@ -513,14 +543,18 @@ For repeated interactive use, run `wigolo serve` so the browser pool, embeddings
 | `wigolo doctor` | Cold-start health check — no network fetches. `--fix` auto-repairs known failures (re-download missing models, install the browser engine, clear stale sidecar state, reset engine breakers — including on a running daemon); `--json` for a machine-readable report. |
 | `wigolo verify` | End-to-end smoke test (fetch, crawl, extract, search, rerank, embed) (`--json`). |
 | `wigolo serve` | HTTP daemon — keeps subsystems warm across multiple clients. A taken port fails with an actionable message naming `--port`. |
-| `wigolo shell` | Interactive REPL (`--json` for piping). |
+| `wigolo shell` | Interactive REPL with tab completion for every command and flag. Pipe a command script to `wigolo shell --json` and each command returns one line of JSON (NDJSON); a non-zero exit means at least one command failed — fully scriptable. |
+| `wigolo tune` | Inspect and reset what wigolo learned per domain — which fetch tier it prefers, challenge-clearance state, and backoff windows. `tune list` / `tune show <domain>` / `tune reset <domain>` / `tune reset --all`, all with `--json`. |
 | `wigolo config` | Settings TUI; or headless `--set K=V`, `--export`, `--import`, `--cleanup`, `--uninstall --yes` (`--json` with `--plain`). |
 | `wigolo status` | Plain-text status summary (`--json`). |
 | `wigolo health` | Ping a running daemon's `/health` (`--json`; exit code = status). |
 | `wigolo warmup` | Optional pre-cache of components for CI/offline: `--all` (browser + models), `--browser`, `--embeddings`, `--reranker`, `--searxng` (opt-in search sidecar). Nothing requires warmup — everything downloads on first use. `--json` for a machine-readable result. |
-| `wigolo backfill` | Embed cached pages that have no vector yet (`--batch-size`, `--dry-run`). |
-| `wigolo plugin add\|list\|remove` | Manage custom extractor / search-engine plugins. |
-| `wigolo uninstall` | Remove wigolo from agent configs (keeps your cache). |
+| `wigolo backfill` | Embed cached pages that have no vector yet (`--batch-size`, `--dry-run`, `--json`). |
+| `wigolo plugin add\|list\|remove` | Manage custom extractor / search-engine plugins (`--json`). |
+| `wigolo auth` | Show configured browser-auth sources — CDP endpoint, Chrome profile, storage state (`--json`; never prints secret values). |
+| `wigolo uninstall` | Remove wigolo from agent configs (keeps your cache). `--yes` to skip confirmation, `--json` for a machine-readable plan+result. |
+
+Every command speaks `--json` for scripting and AI drivers (the exceptions are the `serve` daemon and the `mcp` protocol stream). Output on stdout is always a single machine-readable document; logs go to stderr; the exit code reflects success.
 
 </details>
 
@@ -685,7 +719,7 @@ Keys can also live in the OS keychain or an AES-encrypted file (`wigolo init` / 
 
 ## Beta & feedback
 
-wigolo is in **public beta**. Everything documented here works and is held to a 6,000-test suite — beta is about the polish bar, not stability. It stays beta until enough people have used it, kicked it, and starred it that calling it v1 means something.
+wigolo is in **public beta**. Everything documented here works and is held to a 7,600-test suite — beta is about the polish bar, not stability. It stays beta until enough people have used it, kicked it, and starred it that calling it v1 means something.
 
 That makes your feedback the whole game right now. Every report is read, usually the same day:
 

@@ -1,6 +1,6 @@
 """CrewAI tool adapters for wigolo.
 
-Thin ``BaseTool`` subclasses that delegate all real work to :mod:`crewai_wigolo._core`.
+Thin ``BaseTool`` subclasses that delegate all real work to :mod:`wigolo_crewai._core`.
 Importing this module requires crewai; the core logic in ``_core`` does not.
 """
 
@@ -12,16 +12,16 @@ try:
     from crewai.tools import BaseTool
 except ImportError as exc:  # pragma: no cover - exercised only without crewai
     raise ImportError(
-        "crewai is required to use crewai_wigolo tools. Install it with "
-        "`pip install crewai-wigolo[crewai]` or `pip install crewai`."
+        "crewai is required to use wigolo_crewai tools. Install it with "
+        "`pip install wigolo-crewai[crewai]` or `pip install crewai`."
     ) from exc
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from wigolo import Client
 
-from crewai_wigolo import _core
-from crewai_wigolo.types import (
+from wigolo_crewai import _core
+from wigolo_crewai.types import (
     CrawlInput,
     ExtractInput,
     FetchInput,

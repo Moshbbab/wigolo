@@ -1,4 +1,4 @@
-# crewai-wigolo
+# wigolo-crewai
 
 CrewAI tools for [wigolo](https://github.com/KnockOutEZ/wigolo) — local-first web
 intelligence for your crews. Give agents web search, page fetch, multi-step
@@ -11,7 +11,7 @@ tools, and a zero-setup embedded daemon starts automatically.
 ## Install
 
 ```bash
-pip install crewai-wigolo[crewai]
+pip install wigolo-crewai[crewai]
 ```
 
 This pulls in the `wigolo` SDK. `crewai` is an optional extra so the core
@@ -21,7 +21,7 @@ helpers can be imported without it.
 
 ```python
 from crewai import Agent
-from crewai_wigolo import wigolo_tools
+from wigolo_crewai import wigolo_tools
 
 # Spawns a local wigolo daemon by default (local=True). Point at a running
 # server instead with wigolo_tools(base_url="http://127.0.0.1:8787", token="...").
@@ -38,7 +38,7 @@ researcher = Agent(
 You can also add individual tools:
 
 ```python
-from crewai_wigolo import WigoloSearchTool, WigoloResearchTool, build_client
+from wigolo_crewai import WigoloSearchTool, WigoloResearchTool, build_client
 
 client = build_client(local=True)
 agent_tools = [WigoloSearchTool(client=client), WigoloResearchTool(client=client)]

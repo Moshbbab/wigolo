@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "crewai-wigolo"
+name = "wigolo-crewai"
 version = "0.2.0"
 description = "CrewAI integration for wigolo — local-first web intelligence tools"
 readme = "README.md"

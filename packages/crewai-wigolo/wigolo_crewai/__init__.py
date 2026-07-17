@@ -1,17 +1,17 @@
 """CrewAI integration for wigolo — local-first web intelligence tools.
 
-The core run functions (:mod:`crewai_wigolo._core`) and input schemas
-(:mod:`crewai_wigolo.types`) import cleanly without crewai. The CrewAI tool
+The core run functions (:mod:`wigolo_crewai._core`) and input schemas
+(:mod:`wigolo_crewai.types`) import cleanly without crewai. The CrewAI tool
 classes and the ``wigolo_tools`` factory are imported lazily, so a consumer
 without crewai installed only hits an ImportError when they actually touch a
-tool — not on ``import crewai_wigolo``.
+tool — not on ``import wigolo_crewai``.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from crewai_wigolo._core import (
+from wigolo_crewai._core import (
     build_client,
     run_crawl,
     run_extract,
@@ -19,7 +19,7 @@ from crewai_wigolo._core import (
     run_research,
     run_search,
 )
-from crewai_wigolo.types import (
+from wigolo_crewai.types import (
     CrawlInput,
     ExtractInput,
     FetchInput,
@@ -28,7 +28,7 @@ from crewai_wigolo.types import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from crewai_wigolo.tools import (
+    from wigolo_crewai.tools import (
         WigoloCrawlTool,
         WigoloExtractTool,
         WigoloFetchTool,
@@ -73,7 +73,7 @@ __all__ = [
 def __getattr__(name: str) -> Any:
     """Lazily import crewai-backed tool classes on first access."""
     if name in _LAZY_TOOL_ATTRS:
-        from crewai_wigolo import tools
+        from wigolo_crewai import tools
 
         return getattr(tools, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

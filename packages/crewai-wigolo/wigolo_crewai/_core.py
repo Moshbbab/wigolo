@@ -1,4 +1,4 @@
-"""CrewAI-free core logic for crewai-wigolo.
+"""CrewAI-free core logic for wigolo-crewai.
 
 This module holds all of the real behaviour — building a wigolo client and the
 per-tool run functions that map arguments onto the SDK, shape the result into a

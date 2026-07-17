@@ -8,7 +8,7 @@ import pytest
 
 from wigolo import WigoloAPIError
 
-from crewai_wigolo import _core
+from wigolo_crewai import _core
 
 
 # --- argument mapping: the SDK method is called with the mapped kwargs -------

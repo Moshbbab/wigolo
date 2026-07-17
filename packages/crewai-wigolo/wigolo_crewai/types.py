@@ -1,4 +1,4 @@
-"""Pydantic input schemas for the crewai-wigolo tools.
+"""Pydantic input schemas for the wigolo-crewai tools.
 
 These are the ``args_schema`` models CrewAI uses to validate tool inputs.
 They intentionally expose the common, high-signal parameters of each wigolo

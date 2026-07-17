@@ -14,8 +14,8 @@ import pytest
 
 crewai = pytest.importorskip("crewai", reason="crewai not installed")
 
-from crewai_wigolo import tools  # noqa: E402
-from crewai_wigolo.types import (  # noqa: E402
+from wigolo_crewai import tools  # noqa: E402
+from wigolo_crewai.types import (  # noqa: E402
     CrawlInput,
     ExtractInput,
     FetchInput,

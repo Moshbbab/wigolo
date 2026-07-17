@@ -1,4 +1,4 @@
-"""Shared test fixtures for crewai-wigolo.
+"""Shared test fixtures for wigolo-crewai.
 
 The wigolo Python SDK is not installed in this workspace, so we make it
 importable from the in-repo source tree. This lets ``import wigolo`` (and the

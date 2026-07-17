@@ -114,11 +114,11 @@ function curatedAliases(tool: ToolName): Record<string, Alias> {
     id: { key: 'job_id', kind: 'string' },
   };
 
-  // `--depth` is tool-scoped: crawl → max_depth (number), research → depth (enum).
+  // `--depth` is tool-scoped: crawl → max_depth (number). For research, the
+  // schema property is literally `depth` (an enum), so the schema-derived flag
+  // handles it directly with enum validation — no curated alias needed.
   if (tool === 'crawl') {
     all.depth = { key: 'max_depth', kind: 'number' };
-  } else if (tool === 'research') {
-    all.depth = { key: 'depth', kind: 'string' };
   }
 
   return all;
@@ -195,8 +195,10 @@ export function booleanFlagsFor(command: string): Set<string> {
   }
   const tool = COMMAND_TO_TOOL[command];
   if (tool) {
+    const schemaKeys = new Set(toolFlagSpecs(tool).map((s) => s.key));
     for (const [flag, alias] of Object.entries(curatedAliases(tool))) {
-      if (alias.kind === 'boolean') set.add(flag);
+      if (alias.kind !== 'boolean') continue;
+      if (schemaKeys.has(alias.key) || alias.fixedBoolean !== undefined) set.add(flag);
     }
   }
   return set;
@@ -283,13 +285,18 @@ interface Resolved {
  * schema booleans. Returns undefined for an unknown flag.
  */
 function resolveFlag(tool: ToolName, flag: string): Resolved | undefined {
-  const aliases = curatedAliases(tool);
-  const alias = aliases[flag];
-  if (alias) {
-    return { key: alias.key, kind: alias.kind, fixedBoolean: alias.fixedBoolean };
-  }
   const specs = toolFlagSpecs(tool);
   const bySchemaFlag = new Map(specs.map((s) => [s.flag, s]));
+  const schemaKeys = new Set(specs.map((s) => s.key));
+  const aliases = curatedAliases(tool);
+  const alias = aliases[flag];
+  // A curated alias wins ONLY when its target key exists in this tool's schema
+  // OR it is a synthetic negation alias (no-content/no-cache/no-web) whose key
+  // is a real boolean. Otherwise the alias is inert here and a same-named schema
+  // flag (e.g. cache `limit`, watch `selector`) takes over.
+  if (alias && (schemaKeys.has(alias.key) || alias.fixedBoolean !== undefined)) {
+    return { key: alias.key, kind: alias.kind, fixedBoolean: alias.fixedBoolean };
+  }
   const direct = bySchemaFlag.get(flag);
   if (direct) {
     return { key: direct.key, kind: direct.kind };
@@ -307,11 +314,15 @@ function resolveFlag(tool: ToolName, flag: string): Resolved | undefined {
 /** All known flag names (schema-derived + curated aliases + no- variants). */
 function knownFlagNames(tool: ToolName): string[] {
   const names = new Set<string>();
-  for (const spec of toolFlagSpecs(tool)) {
+  const specs = toolFlagSpecs(tool);
+  const schemaKeys = new Set(specs.map((s) => s.key));
+  for (const spec of specs) {
     names.add(spec.flag);
     if (spec.kind === 'boolean') names.add(`no-${spec.flag}`);
   }
-  for (const flag of Object.keys(curatedAliases(tool))) names.add(flag);
+  for (const [flag, alias] of Object.entries(curatedAliases(tool))) {
+    if (schemaKeys.has(alias.key) || alias.fixedBoolean !== undefined) names.add(flag);
+  }
   return [...names];
 }
 

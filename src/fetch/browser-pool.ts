@@ -8,6 +8,7 @@ import { HYDRATION_PROBE_SOURCE } from './hydration-probe.js';
 import { abortRejection } from '../util/abort.js';
 import { sanitizedChildEnv } from '../util/child-env.js';
 import { isAntiBotStatus, hasBrowserChallengeBody, isChallengeShell } from './tls-tier.js';
+import { pollUntilCleared } from './challenge-completion.js';
 import type { RawFetchResult, BrowserType, ActionResult, BrowserAction } from '../types.js';
 
 /**
@@ -294,6 +295,8 @@ export class MultiBrowserPool {
     // Bail out immediately if the caller's budget is already exhausted.
     if (options.signal?.aborted) throw options.signal.reason;
 
+    // Monotonic start for the challenge-completion remaining-budget math below.
+    const fetchStartMs = Date.now();
     const config = getConfig();
     const navTimeoutMs = options.timeoutMs ?? config.playwrightNavTimeoutMs;
     const loadTimeoutMs = config.playwrightLoadTimeoutMs;
@@ -461,24 +464,48 @@ export class MultiBrowserPool {
           ? hasBrowserChallengeBody(initial)
           : isChallengeShell(statusCode, initial);
         if (isChallenge) {
-          const settleMs = config.challengeSettleMs;
-          log.warn('bot-protection challenge detected, settling before re-check', { url, statusCode, settleMs });
-          await Promise.race([
-            new Promise<void>((resolve) => setTimeout(resolve, settleMs)),
-            abortRejection(options.signal),
-          ]);
-          const reChecked = await readContentWithRetry(page, url).catch(() => '');
-          const stillChallenge = isAntiBotStatus(statusCode)
-            ? hasBrowserChallengeBody(reChecked)
-            : isChallengeShell(statusCode, reChecked);
-          if (stillChallenge) {
-            log.warn('bot-protection challenge did not clear within settle window, fast-failing', { url, statusCode });
+          // Poll the challenge to completion rather than settling once for a
+          // fixed window: a real interstitial that runs its JS and navigates
+          // after >5s used to be fast-failed even though it was about to pass.
+          // The deadline is the min() of the configured completion timeout and
+          // the caller's REMAINING fetch budget: `options.timeoutMs` is the
+          // duration the caller's abort signal is already timing, so the
+          // remaining budget is that minus the time already spent this call
+          // (Date.now() - fetchStartMs). No caller budget => the full timeout.
+          const completionTimeoutMs = config.challengeCompletionTimeoutMs;
+          const remainingBudgetMs =
+            options.timeoutMs !== undefined
+              ? Math.max(0, options.timeoutMs - (Date.now() - fetchStartMs))
+              : completionTimeoutMs;
+          const deadlineMs = Math.min(completionTimeoutMs, remainingBudgetMs);
+          log.warn('bot-protection challenge detected, polling to completion', { url, statusCode, deadlineMs });
+          const outcome = await pollUntilCleared(page, {
+            deadlineMs,
+            intervalMs: 500,
+            isStillChallenge: (html) =>
+              isAntiBotStatus(statusCode) ? hasBrowserChallengeBody(html) : isChallengeShell(statusCode, html),
+            readContent: (p) => readContentWithRetry(p as import('playwright').Page, url).catch(() => ''),
+            readCookies: (p) => {
+              const pg = p as import('playwright').Page;
+              // Guard for page stubs without context() (unit-test mocks) and
+              // for a transient read failure mid-navigation.
+              if (typeof pg.context !== 'function') return Promise.resolve([]);
+              return Promise.resolve(pg.context().cookies()).catch(() => []);
+            },
+            signal: options.signal,
+          });
+          if (!outcome.cleared) {
+            log.warn('bot-protection challenge did not clear within completion window, fast-failing', { url, statusCode });
             throw new ChallengeBlockedError(url);
           }
-          // Auto-passed: the challenge navigated to a real page. Fall through so
-          // the normal post-goto hydration waits run and the final content read
-          // below captures the fully-rendered page.
-          log.info('bot-protection challenge auto-passed within settle window', { url });
+          // Auto-passed: the challenge navigated to a real page. Any clearance
+          // cookie is logged for now; S-A2 wires it into the domain-clearance
+          // store. Fall through so the normal post-goto hydration waits run and
+          // the final content read below captures the fully-rendered page.
+          if (outcome.cfClearance) {
+            log.debug('challenge cleared with clearance cookie', { url, expires: outcome.cfClearance.expires });
+          }
+          log.info('bot-protection challenge auto-passed within completion window', { url });
         }
       }
 

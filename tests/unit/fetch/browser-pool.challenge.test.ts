@@ -84,28 +84,32 @@ describe('browser-pool anti-bot fast-fail (D6)', () => {
 
   it('MUST-FIRE: 403 + challenge markers (near-empty body) fast-fails with ChallengeBlockedError under fake timers', async () => {
     vi.useFakeTimers();
-    process.env.WIGOLO_CHALLENGE_SETTLE_MS = '5000';
+    // Poll to completion, then fast-fail at the bounded deadline. A short
+    // completion window keeps the test fast while proving the bound.
+    process.env.WIGOLO_CHALLENGE_COMPLETION_MS = '5000';
     resetConfig();
     state.status = 403;
-    // Stays a challenge across the settle re-check.
+    // Stays a challenge across every poll — never clears.
     state.bodies = [CHALLENGE_INTERSTITIAL, CHALLENGE_INTERSTITIAL];
 
     const pool = new MultiBrowserPool();
     const start = Date.now();
     const p = pool.fetchWithBrowser('https://blocked.example/');
-    // Attach rejection expectation, then drive the settle timer.
+    // Attach rejection expectation, then drive the completion poll to its deadline.
     const assertion = expect(p).rejects.toBeInstanceOf(ChallengeBlockedError);
     await vi.advanceTimersByTimeAsync(6000);
     await assertion;
     const elapsed = Date.now() - start;
-    // Total challenged-page budget must be well under 10s (settle only).
+    // Total challenged-page budget must be bounded (well under 10s here).
     expect(elapsed).toBeLessThan(10000);
-    delete process.env.WIGOLO_CHALLENGE_SETTLE_MS;
+    delete process.env.WIGOLO_CHALLENGE_COMPLETION_MS;
     await pool.shutdown();
   });
 
   it('carries a use_auth suggestion + names the site bot protection in capability language', async () => {
     vi.useFakeTimers();
+    process.env.WIGOLO_CHALLENGE_COMPLETION_MS = '5000';
+    resetConfig();
     state.status = 403;
     state.bodies = [CHALLENGE_INTERSTITIAL, CHALLENGE_INTERSTITIAL];
 
@@ -119,6 +123,7 @@ describe('browser-pool anti-bot fast-fail (D6)', () => {
     expect(err.hint).toMatch(/use_auth/);
     // Capability language — no vendor internals jargon.
     expect(err.message.toLowerCase()).toMatch(/bot protection|challenge page/);
+    delete process.env.WIGOLO_CHALLENGE_COMPLETION_MS;
     await pool.shutdown();
   });
 
@@ -137,7 +142,7 @@ describe('browser-pool anti-bot fast-fail (D6)', () => {
     // NEW SPEC: a challenge interstitial served at HTTP 200 (DataDome-style)
     // must be treated as a challenge — the gate is no longer status-gated.
     vi.useFakeTimers();
-    process.env.WIGOLO_CHALLENGE_SETTLE_MS = '5000';
+    process.env.WIGOLO_CHALLENGE_COMPLETION_MS = '5000';
     resetConfig();
     state.status = 200;
     state.bodies = [CHALLENGE_INTERSTITIAL, CHALLENGE_INTERSTITIAL];
@@ -147,7 +152,7 @@ describe('browser-pool anti-bot fast-fail (D6)', () => {
     const assertion = expect(p).rejects.toBeInstanceOf(ChallengeBlockedError);
     await vi.advanceTimersByTimeAsync(6000);
     await assertion;
-    delete process.env.WIGOLO_CHALLENGE_SETTLE_MS;
+    delete process.env.WIGOLO_CHALLENGE_COMPLETION_MS;
     await pool.shutdown();
   });
 
@@ -189,6 +194,28 @@ describe('browser-pool anti-bot fast-fail (D6)', () => {
     await vi.advanceTimersByTimeAsync(6000);
     const res = await p;
     expect(res.html).toContain('Real hydrated content');
+    await pool.shutdown();
+  });
+
+  it('MUST-NOT-FIRE: a challenge that completes AFTER the old 5s fixed settle is now captured, not fast-failed', async () => {
+    // WHY this slice exists: the old fixed 5s settle re-checked exactly once and
+    // fast-failed anything still challenged at 5s. A real Cloudflare interstitial
+    // that runs its JS and navigates at ~8s was lost. Polling to a 15s completion
+    // deadline must now capture it.
+    vi.useFakeTimers();
+    process.env.WIGOLO_CHALLENGE_COMPLETION_MS = '15000';
+    resetConfig();
+    state.status = 403;
+    const realArticle = '<html><body><article>' + 'Real hydrated content here. '.repeat(50) + '</article></body></html>';
+    // Challenge persists across ~16 polls (500ms each ≈ 8s), then the real page renders.
+    state.bodies = [...Array(16).fill(CHALLENGE_INTERSTITIAL), realArticle];
+
+    const pool = new MultiBrowserPool();
+    const p = pool.fetchWithBrowser('https://blocked.example/');
+    await vi.advanceTimersByTimeAsync(9000);
+    const res = await p;
+    expect(res.html).toContain('Real hydrated content');
+    delete process.env.WIGOLO_CHALLENGE_COMPLETION_MS;
     await pool.shutdown();
   });
 

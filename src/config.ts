@@ -20,6 +20,12 @@ export interface Config {
    * proceeds normally; a still-blocked page fast-fails. Bounds the total
    * challenged-page budget well under the nav timeout. */
   challengeSettleMs: number;
+  /** Upper bound on the browser tier's challenge-completion poll. A detected
+   * challenge is polled (not settled once) until the real page renders or a
+   * `cf_clearance` cookie appears; a challenge that clears within this window
+   * proceeds normally, otherwise it fast-fails. The effective deadline is the
+   * min() of this and the caller's remaining fetch budget. */
+  challengeCompletionTimeoutMs: number;
   searxngQueryTimeoutMs: number;
   searchFetchTimeoutMs: number;
   searchFetchTimeoutBalancedMs: number;
@@ -280,6 +286,7 @@ export function getConfig(): Config {
     playwrightLoadTimeoutMs: envInt('PLAYWRIGHT_LOAD_TIMEOUT_MS', 15000, settings, 'playwrightLoadTimeoutMs'),
     playwrightNavTimeoutMs: envInt('PLAYWRIGHT_NAV_TIMEOUT_MS', 30000, settings, 'playwrightNavTimeoutMs'),
     challengeSettleMs: envInt('WIGOLO_CHALLENGE_SETTLE_MS', 5000, settings, 'challengeSettleMs'),
+    challengeCompletionTimeoutMs: envInt('WIGOLO_CHALLENGE_COMPLETION_MS', 15000, settings, 'challengeCompletionTimeoutMs'),
     searxngQueryTimeoutMs: envInt('SEARXNG_QUERY_TIMEOUT_MS', 8000, settings, 'searxngQueryTimeoutMs'),
     searchFetchTimeoutMs: envInt('SEARCH_FETCH_TIMEOUT_MS', 15000, settings, 'searchFetchTimeoutMs'),
     searchFetchTimeoutBalancedMs: envInt('SEARCH_FETCH_TIMEOUT_BALANCED_MS', 3000, settings, 'searchFetchTimeoutBalancedMs'),

@@ -21,8 +21,16 @@ import {
   recordTlsImpersonationSuccess,
   getDomainClearance,
   clearDomainClearance,
+  getBackoff,
+  recordBackoff,
   type DomainClearance,
 } from '../cache/store.js';
+import {
+  parseRetryAfter,
+  clampBackoffMs,
+  DEFAULT_BACKOFF_MS,
+} from './politeness.js';
+import { resolveStealthUA } from './stealth.js';
 import {
   CLEARANCE_COOKIE_NAME,
   clearanceCookieValue,
@@ -184,10 +192,17 @@ export interface TlsRoutingPersistence {
  * Anti-bot clearance store seam (S-A2). The router reads a stored clearance
  * before a dispatch and purges a dead one after a re-challenge. Injectable so
  * router unit tests exercise reuse without a DB; defaults to the cache store.
+ *
+ * S-A5 extends the seam with the per-host rate-limit backoff window so the same
+ * injection point covers both clearance reuse and origin-politeness backoff.
  */
 export interface ClearanceStore {
   get(host: string): DomainClearance | null;
   clear(host: string): void;
+  /** Epoch ms when the host's rate-limit cooldown ends, or null when none. */
+  getBackoff(host: string): number | null;
+  /** Record a per-host rate-limit cooldown (epoch ms). */
+  recordBackoff(host: string, untilEpochMs: number): void;
 }
 
 export interface SmartRouterOptions {
@@ -716,6 +731,14 @@ export class SmartRouter {
 
     // Stealth mode: static fetch first, escalate to Playwright when content is thin.
     if (mode === 'stealth') {
+      // A 429 backoff window is the origin rate-limiting us — stealth is the
+      // retry-past-a-block escape hatch, but it cannot clear a rate limit, so
+      // it respects the window too rather than hammering the origin.
+      const stealthBackoff = this.backoffWindowResult(url, domain);
+      if (stealthBackoff) {
+        logger.debug('host in rate-limit backoff window — skipping stealth origin fetch', { url, domain });
+        return stealthBackoff;
+      }
       logger.debug('routing to stealth (static then escalate)', { url });
       const staticResult = await this.httpFetcher(url, { headers, signal });
       this.ensureStats(domain);
@@ -884,6 +907,16 @@ export class SmartRouter {
       return this.toRawFetchResult(result);
     }
 
+    // auto: honor an active rate-limit backoff window before touching the
+    // origin — a 429 means the origin is rate-limiting us, so re-hammering it
+    // (any tier) does not help. Expired/absent windows fall through and fetch
+    // normally (no false positives).
+    const autoBackoff = this.backoffWindowResult(url, domain);
+    if (autoBackoff) {
+      logger.debug('host in rate-limit backoff window — skipping origin fetch', { url, domain });
+      return autoBackoff;
+    }
+
     // auto: check if domain is already marked for Playwright
     const stats = this.ensureStats(domain);
 
@@ -924,11 +957,40 @@ export class SmartRouter {
     // Try HTTP first
     try {
       if (!this.httpClient) throw new Error('SmartRouter: httpClient not configured');
-      const result = await this.httpClientFetch(url, { headers, conditionalHeaders, signal });
+      let result = await this.httpClientFetch(url, { headers, conditionalHeaders, signal });
 
       // 304 = unchanged: pass through; never escalate to a browser.
       if (result.statusCode === 304) {
         return this.toRawFetchResult(result);
+      }
+
+      // A bare 403 (anti-bot status, no challenge body) is sometimes a
+      // UA-fingerprint block rather than a hard wall. Before paying the cost of
+      // a heavier tier, retry the HTTP fetch EXACTLY ONCE with a rotated
+      // desktop User-Agent. If the rotated attempt is no longer blocked, use it;
+      // if it is still blocked, fall through with the retried result so the
+      // existing escalation ladder runs unchanged. A 403 is NOT a rate-limit, so
+      // no backoff window is recorded. Bounded to one retry — no loop.
+      // Restricted to a BARE 403 (no challenge markers): a Cloudflare/DataDome
+      // challenge-body 403 is a strong wall a UA rotation cannot clear, so it
+      // escalates directly without paying for a doomed retry.
+      if (result.statusCode === 403 && !hasChallengeBody(result.html)) {
+        const rotatedUa = resolveStealthUA();
+        const currentUa = headers?.['User-Agent'] ?? config.userAgent;
+        if (rotatedUa !== currentUa) {
+          logger.debug('bare 403 — retrying once with a rotated user-agent', { url, domain });
+          const retried = await this.httpClientFetch(url, {
+            headers: { ...headers, 'User-Agent': rotatedUa },
+            conditionalHeaders,
+            signal,
+          });
+          if (!isAntiBotSignal(retried.statusCode, retried.html)) {
+            logger.debug('rotated user-agent cleared the 403', { url, domain });
+            return this.guardChallengeShell(this.toRawFetchResult(retried));
+          }
+          // Still blocked — carry the retried result into the escalation ladder.
+          result = retried;
+        }
       }
 
       // A PDF response is a completed byte-tier result. The HTTP tier returns
@@ -946,7 +1008,23 @@ export class SmartRouter {
       // escalation just pays the browser cold-start cost. Surface the 429
       // directly so callers (tools/fetch.ts) can map it to a stage error.
       if (isRateLimit(result.statusCode, result.html)) {
-        logger.debug('rate-limit (429) without challenge body — passing through, NOT escalating', { url, domain });
+        // Park the host in a bounded backoff window so subsequent fetches don't
+        // re-hammer it. Honor Retry-After when present; otherwise a default
+        // window. A hostile/absurd Retry-After is clamped so a domain is never
+        // parked for hours.
+        const retryMs = clampBackoffMs(
+          parseRetryAfter(result.headers['retry-after'], Date.now()) ?? DEFAULT_BACKOFF_MS,
+        );
+        try {
+          this.clearanceStore.recordBackoff(domain, Date.now() + retryMs);
+        } catch {
+          // Best-effort — never block the pass-through on a persistence miss.
+        }
+        logger.debug('rate-limited, backing off', {
+          url,
+          domain,
+          backoffSeconds: Math.round(retryMs / 1000),
+        });
         return this.toRawFetchResult(result);
       }
 
@@ -1172,6 +1250,34 @@ export class SmartRouter {
     };
   }
 
+  /**
+   * When `host` is inside an active rate-limit backoff window, returns a
+   * synthetic 429 result WITHOUT touching the origin — a 429 is the origin
+   * rate-limiting us, so re-hammering it (even via stealth/force_refresh) does
+   * not help and is impolite. The plain-text body carries no challenge markers,
+   * so it maps to `http_429` downstream exactly as a real pass-through 429 does.
+   * Returns null when there is no active window (null or expired) so the caller
+   * fetches normally — no false positives.
+   */
+  private backoffWindowResult(url: string, host: string): RawFetchResult | null {
+    let backoffUntil: number | null;
+    try {
+      backoffUntil = this.clearanceStore.getBackoff(host);
+    } catch {
+      backoffUntil = null;
+    }
+    if (backoffUntil == null || Date.now() >= backoffUntil) return null;
+    return {
+      url,
+      finalUrl: url,
+      html: `host is in a rate-limit backoff window; retry after ${new Date(backoffUntil).toISOString()}`,
+      contentType: 'text/plain',
+      statusCode: 429,
+      method: 'http',
+      headers: { 'retry-after': String(Math.ceil((backoffUntil - Date.now()) / 1000)) },
+    };
+  }
+
   // --- TLS-impersonation tier helpers ---
 
   /**
@@ -1301,6 +1407,20 @@ function defaultClearanceStore(): ClearanceStore {
     clear(host) {
       try {
         clearDomainClearance(host);
+      } catch {
+        // Best-effort — swallow.
+      }
+    },
+    getBackoff(host) {
+      try {
+        return getBackoff(host);
+      } catch {
+        return null;
+      }
+    },
+    recordBackoff(host, untilEpochMs) {
+      try {
+        recordBackoff(host, untilEpochMs);
       } catch {
         // Best-effort — swallow.
       }

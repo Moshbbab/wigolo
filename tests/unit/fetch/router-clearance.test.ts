@@ -70,6 +70,8 @@ function build(stored: Record<string, DomainClearance>, tlsResultHtml?: string):
   const clearanceStore: ClearanceStore = {
     get: (host) => stored[host] ?? null,
     clear: (host) => { cleared.push(host); },
+    getBackoff: () => null,
+    recordBackoff: () => {},
   };
   const router = new SmartRouter({
     httpClient: httpClient as unknown as HttpClient,
@@ -158,6 +160,8 @@ describe('SmartRouter clearance reuse — TLS tier', () => {
         ? { cookie: 'cf_clearance=STALE', ua: CHROME_UA, tier: 'tls', expiresAt: future() }
         : null),
       clear: (host) => { cleared.push(host); },
+      getBackoff: () => null,
+      recordBackoff: () => {},
     };
     // Both TLS and HTTP land on the challenge shell so the ladder must reach the
     // browser tier — proving the shell is never returned as content.

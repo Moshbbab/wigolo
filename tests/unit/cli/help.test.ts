@@ -60,11 +60,14 @@ describe('printHelp', () => {
     expect(text).toContain('find_similar');
   });
 
-  it('documents the reworked warmup flag set', () => {
+  it('documents the warmup flag set in capability language', () => {
     const { stream, output } = captureStream();
     printHelp(stream);
     const text = output();
-    expect(text).toContain('warmup [--all|--searxng|--browser|--no-searxng]');
+    // The global help is capability-language only (no sidecar implementation
+    // name); the warmup line advertises the component groups it can re-warm.
+    expect(text).toContain('warmup [--all|--browser|--reranker|--embeddings]');
+    expect(text).not.toMatch(/searxng/i);
   });
 
   it('documents doctor --fix and --json (S9/D9)', () => {

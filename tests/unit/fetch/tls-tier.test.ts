@@ -319,6 +319,59 @@ describe('tls-tier: modern-CF challenge (header + guarded body marker)', () => {
   });
 });
 
+describe('stillShowingChallenge — browser-tier CLEAR-CHECK body predicate', () => {
+  // The browser tier's poll re-reads the RENDERED body each tick. This predicate
+  // is the "still a challenge?" clear-check — it must key on the CURRENT DOM, not
+  // the (stale) nav header, and must recognise the modern-CF rendered challenge
+  // whose only body signal is the /cdn-cgi/challenge-platform/ script, WITHOUT
+  // over-firing on a real full article that merely references that path.
+  const MODERN_CF_SKELETON =
+    '<html><head><title>Just a moment...</title></head><body>' +
+    '<div id="challenge-error-text">Verifying you are human.</div>' +
+    '<script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1?ray=x"></script>' +
+    '</body></html>';
+
+  it('MUST-FIRE: modern-CF rendered challenge (challenge-platform marker + skeleton) → true', async () => {
+    const { stillShowingChallenge } = await import('../../../src/fetch/tls-tier.js');
+    expect(stillShowingChallenge(MODERN_CF_SKELETON)).toBe(true);
+  });
+
+  it('MUST-FIRE: legacy challenge body (via hasBrowserChallengeBody) → true', async () => {
+    const { stillShowingChallenge } = await import('../../../src/fetch/tls-tier.js');
+    const legacy =
+      '<html><head><title>Just a moment...</title></head><body>' +
+      '<div class="cf-browser-verification"></div><div class="cf-turnstile"></div></body></html>';
+    expect(stillShowingChallenge(legacy)).toBe(true);
+  });
+
+  it('MUST-NOT-FIRE: a real full article that references /cdn-cgi/challenge-platform/ → false (skeleton gate)', async () => {
+    const { stillShowingChallenge } = await import('../../../src/fetch/tls-tier.js');
+    // The cleared page IS a real article — the clear-check must report NOT a
+    // challenge so pollUntilCleared returns cleared. A body that quotes the
+    // script path but carries substantial prose is not a skeleton.
+    const realArticle =
+      '<html><body><article><h1>How the challenge-platform works</h1>' +
+      ('The verification script lives at /cdn-cgi/challenge-platform/ and runs a check. ' +
+        'Here is a deep dive of real article prose so this is unmistakably content. '.repeat(10)) +
+      '</article></body></html>';
+    expect(stillShowingChallenge(realArticle)).toBe(false);
+  });
+
+  it('MUST-NOT-FIRE: a plain real article with no markers at all → false', async () => {
+    const { stillShowingChallenge } = await import('../../../src/fetch/tls-tier.js');
+    const article =
+      '<html><body><article>' + 'Real hydrated content here. '.repeat(50) + '</article></body></html>';
+    expect(stillShowingChallenge(article)).toBe(false);
+  });
+
+  it('MUST-NOT-FIRE: empty / nullish body → false', async () => {
+    const { stillShowingChallenge } = await import('../../../src/fetch/tls-tier.js');
+    expect(stillShowingChallenge('')).toBe(false);
+    expect(stillShowingChallenge(null)).toBe(false);
+    expect(stillShowingChallenge(undefined)).toBe(false);
+  });
+});
+
 describe('tls-tier: lazy load + module cache safety', () => {
   beforeEach(() => {
     process.env = { ...originalEnv };

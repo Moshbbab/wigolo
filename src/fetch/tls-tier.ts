@@ -517,6 +517,37 @@ export function hasBrowserChallengeBody(html: string | null | undefined): boolea
 }
 
 /**
+ * Browser-tier CLEAR-CHECK: does the CURRENTLY-RENDERED body still show a
+ * challenge? Used as the `isStillChallenge` predicate the completion poll
+ * re-evaluates each tick — it MUST key on the live DOM, never the (stale) nav
+ * header, so a genuinely-cleared challenge (the real page rendered) reports
+ * false and the poll returns cleared.
+ *
+ * Fires when EITHER:
+ *   - the existing browser challenge-body scan matches
+ *     (hasBrowserChallengeBody: legacy markers, or contextual turnstile on a
+ *     skeleton), OR
+ *   - the modern-CF `/cdn-cgi/challenge-platform/` script marker is present AND
+ *     the body is a near-empty skeleton (visible text under the interstitial
+ *     floor). The skeleton gate here is TEXT-LENGTH based — deliberately NOT
+ *     isChallengeSkeleton, which short-circuits true on the marker itself — so a
+ *     real full article that merely references the script path (substantial
+ *     prose) is NOT treated as still-challenge and the poll clears.
+ */
+export function stillShowingChallenge(html: string | null | undefined): boolean {
+  if (!html) return false;
+  if (hasBrowserChallengeBody(html)) return true;
+  const slice = html.length > 32768 ? html.slice(0, 32768) : html;
+  if (
+    slice.includes(MODERN_CHALLENGE_PLATFORM_MARKER) &&
+    approxVisibleTextLength(slice) < CHALLENGE_SKELETON_MAX_TEXT
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * A 429 without an anti-bot challenge body is a plain
  * rate-limit, not an anti-bot wall. Playwright will hit the same rate
  * limit, so escalation just pays the browser cold-start cost for no gain.

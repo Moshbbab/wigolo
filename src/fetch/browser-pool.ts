@@ -9,7 +9,7 @@ import { abortRejection } from '../util/abort.js';
 import { sanitizedChildEnv } from '../util/child-env.js';
 import { playwrightProxyOption } from './proxy-credentials.js';
 import { redactUrl } from '../util/redact-url.js';
-import { isAntiBotStatus, hasBrowserChallengeBody, isChallengeShell } from './tls-tier.js';
+import { isAntiBotStatus, hasBrowserChallengeBody, isChallengeShell, isChallengeResponse, stillShowingChallenge, hasChallengeHeader } from './tls-tier.js';
 import { pollUntilCleared } from './challenge-completion.js';
 import { resolveStealthUA, stealthLaunchArgs, stealthContextOptions, STEALTH_INIT_SCRIPT } from './stealth.js';
 import { recordDomainClearance, clearDomainClearance } from '../cache/store.js';
@@ -647,8 +647,15 @@ export class MultiBrowserPool {
         // required at 2xx (see isChallengeShell), so an article quoting the
         // markers never enters the settle window.
         const initial = await readContentWithRetry(page, url).catch(() => '');
+        // TRIGGER (should we poll?): header-inclusive so a modern-CF 403 whose
+        // body carries none of the legacy markers — its only signals are the
+        // `cf-mitigated: challenge` nav header + the /cdn-cgi/challenge-platform/
+        // script — still enters the completion poll. isChallengeResponse folds
+        // in the header, the legacy shell classifier, and the status-gated
+        // modern marker. The 2xx branch keeps isChallengeShell (markers +
+        // skeleton) so a real 200 article never enters the settle window.
         const isChallenge = isAntiBotStatus(statusCode)
-          ? hasBrowserChallengeBody(initial)
+          ? isChallengeResponse(statusCode, initial, responseHeaders)
           : isChallengeShell(statusCode, initial);
         if (isChallenge) {
           // Poll the challenge to completion rather than settling once for a
@@ -669,8 +676,16 @@ export class MultiBrowserPool {
           const outcome = await pollUntilCleared(page, {
             deadlineMs,
             intervalMs: 500,
+            // CLEAR-CHECK (still a challenge?): keys on the CURRENT RENDERED
+            // BODY only — NEVER the nav header, which stays `cf-mitigated:
+            // challenge` even after the challenge clears (a header-based check
+            // would never report cleared and would wrongly fast-fail a genuine
+            // pass). stillShowingChallenge recognises the modern-CF rendered
+            // skeleton (challenge-platform script + near-empty body) yet its
+            // text-length skeleton gate lets a real article that merely
+            // references the script path clear.
             isStillChallenge: (html) =>
-              isAntiBotStatus(statusCode) ? hasBrowserChallengeBody(html) : isChallengeShell(statusCode, html),
+              isAntiBotStatus(statusCode) ? stillShowingChallenge(html) : isChallengeShell(statusCode, html),
             readContent: (p) => readContentWithRetry(p as import('playwright').Page, url).catch(() => ''),
             readCookies: (p) => {
               const pg = p as import('playwright').Page;
@@ -697,11 +712,32 @@ export class MultiBrowserPool {
             log.warn('bot-protection challenge did not clear within completion window, fast-failing', { url, statusCode });
             throw new ChallengeBlockedError(url);
           }
-          // Auto-passed: the challenge navigated to a real page. Persist any
-          // minted clearance cookie against the exact UA this context advertised
-          // + tier:'browser' so a later visit can replay it. Fall through so the
-          // normal post-goto hydration waits run and the final content read
-          // below captures the fully-rendered page.
+          // Auto-passed: the challenge navigated to a real page. The captured
+          // nav statusCode/responseHeaders are STALE — they still describe the
+          // initial 403 + `cf-mitigated: challenge` interstitial response, not
+          // the real page that ultimately rendered. Left as-is they would make
+          // the router's guardChallengeShell (which runs isChallengeResponse on
+          // the returned result) wrongly re-classify this CLEARED page as
+          // blocked_by_challenge. Normalise the result to reflect the final page:
+          // report a 200 and drop the stale challenge header so a cleared
+          // challenge returns content, while a still-challenge (never reaches
+          // here — it threw ChallengeBlockedError above) is the only path that
+          // maps to blocked_by_challenge.
+          if (isAntiBotStatus(statusCode)) {
+            statusCode = 200;
+          }
+          if (hasChallengeHeader(responseHeaders)) {
+            const normalized: Record<string, string> = {};
+            for (const [k, v] of Object.entries(responseHeaders)) {
+              if (k.toLowerCase() === 'cf-mitigated') continue;
+              normalized[k] = v;
+            }
+            responseHeaders = normalized;
+          }
+          // Persist any minted clearance cookie against the exact UA this context
+          // advertised + tier:'browser' so a later visit can replay it. Fall
+          // through so the normal post-goto hydration waits run and the final
+          // content read below captures the fully-rendered page.
           if (outcome.cfClearance) {
             const host = hostOf(finalUrl) ?? hostOf(url);
             const ua = advertisedUa ?? (await readAdvertisedUa(page));

@@ -10,6 +10,10 @@ interface PageState {
   bodies: string[];
   gotoRejectsTimeout: boolean;
   contentCalls: number;
+  // Nav-response headers the mock reports (response.headers()). A modern-CF
+  // challenge carries `cf-mitigated: challenge` here even when the body has no
+  // legacy markers.
+  headers: Record<string, string>;
 }
 
 const state: PageState = {
@@ -17,6 +21,7 @@ const state: PageState = {
   bodies: ['<html><body>ok</body></html>'],
   gotoRejectsTimeout: false,
   contentCalls: 0,
+  headers: { 'content-type': 'text/html' },
 };
 
 function makeTimeoutErr() {
@@ -35,7 +40,7 @@ vi.mock('playwright', () => {
           return Promise.resolve({
             status: () => state.status,
             url: () => 'https://blocked.example/',
-            headers: () => ({ 'content-type': 'text/html' }),
+            headers: () => state.headers,
           });
         }),
         waitForLoadState: vi.fn().mockResolvedValue(undefined),
@@ -62,6 +67,16 @@ const CHALLENGE_INTERSTITIAL =
   '<html><head><title>Just a moment...</title></head><body>' +
   '<div class="cf-browser-verification"></div><div class="cf-turnstile"></div></body></html>';
 
+// A modern-Cloudflare challenge served at HTTP 403 with `cf-mitigated:
+// challenge` and a body that carries NONE of the legacy markers — its only body
+// signal is the /cdn-cgi/challenge-platform/ script on a near-empty skeleton.
+// This is the Upwork-shaped challenge S-A7/S-A8 target.
+const MODERN_CF_CHALLENGE =
+  '<html><head><title>Verify</title></head><body>' +
+  '<div id="challenge-running">Verifying you are human.</div>' +
+  '<script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1?ray=x"></script>' +
+  '</body></html>';
+
 // A 200 article whose PROSE quotes challenge marker strings — must never fire.
 const ARTICLE_QUOTING_MARKERS =
   '<html><head><title>How Cloudflare challenges work</title></head><body><article>' +
@@ -76,6 +91,7 @@ describe('browser-pool anti-bot fast-fail (D6)', () => {
     state.bodies = ['<html><body>ok</body></html>'];
     state.gotoRejectsTimeout = false;
     state.contentCalls = 0;
+    state.headers = { 'content-type': 'text/html' };
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -237,6 +253,85 @@ describe('browser-pool anti-bot fast-fail (D6)', () => {
     const res = await pool.fetchWithBrowser('https://spa.example/');
     expect(res.warning).toBe('goto_timeout_partial_content');
     expect(res.html).toContain('partial shell content');
+    await pool.shutdown();
+  });
+
+  it('TRIGGER: modern-CF 403 + cf-mitigated header + body WITHOUT legacy markers enters the poll and fast-fails when it never clears', async () => {
+    // Before S-A8 the trigger used only OLD body markers, so a modern-CF
+    // challenge (whose body has no legacy markers) NEVER entered the poll and the
+    // shell leaked as content. Now the header-inclusive trigger recognises it.
+    vi.useFakeTimers();
+    process.env.WIGOLO_CHALLENGE_COMPLETION_MS = '5000';
+    resetConfig();
+    state.status = 403;
+    state.headers = { 'content-type': 'text/html', 'cf-mitigated': 'challenge' };
+    state.bodies = [MODERN_CF_CHALLENGE, MODERN_CF_CHALLENGE];
+
+    const pool = new MultiBrowserPool();
+    const p = pool.fetchWithBrowser('https://blocked.example/');
+    const assertion = expect(p).rejects.toBeInstanceOf(ChallengeBlockedError);
+    await vi.advanceTimersByTimeAsync(6000);
+    await assertion;
+    delete process.env.WIGOLO_CHALLENGE_COMPLETION_MS;
+    await pool.shutdown();
+  });
+
+  it('CLEAR-CHECK cleared: modern-CF challenge that renders real content returns the CONTENT (stale-header false-positive guard)', async () => {
+    // The nav header stays `cf-mitigated: challenge` even after the challenge
+    // clears and the real page renders. The clear-check keys on the RENDERED
+    // BODY, not the header, so this must return the real content — NOT
+    // blocked_by_challenge. It also proves the final result no longer carries a
+    // 403 / stale cf-mitigated so the router guard won't mislabel it.
+    vi.useFakeTimers();
+    state.status = 403;
+    state.headers = { 'content-type': 'text/html', 'cf-mitigated': 'challenge' };
+    const realArticle = '<html><body><article>' + 'Real hydrated content here. '.repeat(50) + '</article></body></html>';
+    state.bodies = [MODERN_CF_CHALLENGE, realArticle];
+
+    const pool = new MultiBrowserPool();
+    const p = pool.fetchWithBrowser('https://blocked.example/');
+    await vi.advanceTimersByTimeAsync(6000);
+    const res = await p;
+    expect(res.html).toContain('Real hydrated content');
+    // Cleared challenge must not report the stale 403 / cf-mitigated header, or
+    // the router's guardChallengeShell would wrongly block it downstream.
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['cf-mitigated']).toBeUndefined();
+    await pool.shutdown();
+  });
+
+  it('CLEAR-CHECK still-blocked: modern-CF skeleton that never clears + no cf_clearance fast-fails with ChallengeBlockedError', async () => {
+    vi.useFakeTimers();
+    process.env.WIGOLO_CHALLENGE_COMPLETION_MS = '5000';
+    resetConfig();
+    state.status = 403;
+    state.headers = { 'content-type': 'text/html', 'cf-mitigated': 'challenge' };
+    state.bodies = [MODERN_CF_CHALLENGE, MODERN_CF_CHALLENGE];
+
+    const pool = new MultiBrowserPool();
+    const p = pool.fetchWithBrowser('https://blocked.example/');
+    const assertion = expect(p).rejects.toBeInstanceOf(ChallengeBlockedError);
+    await vi.advanceTimersByTimeAsync(6000);
+    await assertion;
+    delete process.env.WIGOLO_CHALLENGE_COMPLETION_MS;
+    await pool.shutdown();
+  });
+
+  it('MUST-NOT-FIRE: a real 200 article referencing /cdn-cgi/challenge-platform/ (substantial prose) extracts normally', async () => {
+    // The clear-check skeleton gate is text-length based, so a real article that
+    // merely references the challenge-platform script path is NOT a skeleton.
+    state.status = 200;
+    const article =
+      '<html><body><article><h1>How the challenge-platform works</h1>' +
+      ('The verification script lives at /cdn-cgi/challenge-platform/ and runs a check. ' +
+        'Here is a deep dive of real article prose so this is unmistakably content. '.repeat(10)) +
+      '</article></body></html>';
+    state.bodies = [article];
+
+    const pool = new MultiBrowserPool();
+    const res = await pool.fetchWithBrowser('https://news.example/article');
+    expect(res.statusCode).toBe(200);
+    expect(res.html).toContain('How the challenge-platform works');
     await pool.shutdown();
   });
 

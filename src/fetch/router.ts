@@ -697,7 +697,15 @@ export class SmartRouter {
     }
 
     try {
-      return await this.browserPool.fetchWithBrowser(url, browserOptions);
+      // Guard the browser SUCCESS return: a browser result that is STILL a
+      // challenge (an uncleared modern-CF interstitial that reports 403 +
+      // cf-mitigated + a challenge body) must become a labeled
+      // blocked_by_challenge, never leak the shell as content. guardChallengeShell
+      // runs isChallengeResponse(status, html, headers). A CLEARED challenge is
+      // safe here: the browser pool normalises a cleared result to 200 and drops
+      // the stale cf-mitigated header, so the guard only fires on a genuine
+      // still-challenge; normal content passes through unchanged.
+      return this.guardChallengeShell(await this.browserPool.fetchWithBrowser(url, browserOptions));
     } catch (err) {
       if (err instanceof ChallengeBlockedError) {
         // Terminal browser challenge-block. Before returning the fast-fail, try

@@ -547,6 +547,55 @@ describe('SmartRouter: browser-tier challenge → blocked_by_challenge StageErro
     const router = build(async () => { throw new Error('some other browser crash'); });
     await expect(router.fetch('https://x.example/', { renderJs: 'always' })).rejects.toThrow('some other browser crash');
   });
+
+  it('SUCCESS-RETURN GUARD: fetchWithBrowser returning a still-challenge result (403 + cf-mitigated) → blocked_by_challenge, never content', async () => {
+    // The browser pool can return (not throw) a still-challenge result — e.g. a
+    // modern-CF interstitial that reports 403 + cf-mitigated + a challenge body.
+    // The success-return guard must map it to blocked_by_challenge so the shell
+    // never leaks as content.
+    const modernCfShell =
+      '<html><head><title>Verify</title></head><body>' +
+      '<div id="challenge-running">Verifying you are human.</div>' +
+      '<script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1?ray=x"></script>' +
+      '</body></html>';
+    const router = build(async (url: string): Promise<RawFetchResult> => ({
+      url,
+      finalUrl: url,
+      html: modernCfShell,
+      contentType: 'text/html',
+      statusCode: 403,
+      method: 'playwright',
+      headers: { 'cf-mitigated': 'challenge' },
+    }));
+    const result = await router.fetch('https://blocked.example/', { renderJs: 'always' });
+    expect('error' in result).toBe(true);
+    expect((result as { error: string }).error).toBe('blocked_by_challenge');
+  });
+
+  it('SUCCESS-RETURN GUARD: a CLEARED modern-CF result (browser normalised to 200, cf-mitigated dropped) passes through as content', async () => {
+    // After the challenge clears, the browser pool normalises the result to 200
+    // and drops the stale cf-mitigated header. The guard must NOT fire on it.
+    const router = build(async (url: string): Promise<RawFetchResult> => ({
+      url,
+      finalUrl: url,
+      html: FULL_HTML,
+      contentType: 'text/html',
+      statusCode: 200,
+      method: 'playwright',
+      headers: { server: 'cloudflare' },
+    }));
+    const result = await router.fetch('https://blocked.example/', { renderJs: 'always' });
+    expect('error' in result).toBe(false);
+    expect((result as RawFetchResult).method).toBe('playwright');
+    expect((result as RawFetchResult).html).toContain('real content');
+  });
+
+  it('SUCCESS-RETURN GUARD: a normal 200 content result passes through unchanged', async () => {
+    const router = build(async (url: string) => makeBrowserResult(url));
+    const result = await router.fetch('https://ok.example/', { renderJs: 'always' });
+    expect('error' in result).toBe(false);
+    expect((result as RawFetchResult).method).toBe('playwright');
+  });
 });
 
 // A DataDome-style interstitial served at HTTP 200: challenge markers PLUS a

@@ -172,18 +172,15 @@ The same ten tools serve every kind of agent, over whichever surface fits:
 
 One honest note for self-hosters: some challenge-protected sites score IP reputation, so a datacenter IP won't clear walls a home connection would. wigolo labels those failures instead of faking them, and the [self-hosting guide](docs/self-hosting.md) covers the opt-in proxy answer.
 
-## Momentum
-
-wigolo went public in early July 2026 — **most of the stars below landed in a single 48-hour window.**
+## Star history
 
 <div align="center">
 
-<picture>
-<source media="(prefers-color-scheme: dark)" srcset="assets/promo/stars-dark.svg">
-<img alt="wigolo GitHub star growth — a flat line through mid-July, then a sharp climb as the project found its audience over one 48-hour window" src="assets/promo/stars.svg" width="880">
-</picture>
+<a href="https://star-history.com/#KnockOutEZ/wigolo&Date">
+<img alt="wigolo GitHub star history" src="https://api.star-history.com/svg?repos=KnockOutEZ/wigolo&type=Date" width="720">
+</a>
 
-<sub>Chart generated from the public GitHub star timeline. If it's still climbing when you read this, that's the point — <a href="https://github.com/KnockOutEZ/wigolo">add a ⭐</a>.</sub>
+<sub>Live chart — it updates itself. If it's still climbing when you read this, <a href="https://github.com/KnockOutEZ/wigolo">add a ⭐</a>.</sub>
 
 </div>
 

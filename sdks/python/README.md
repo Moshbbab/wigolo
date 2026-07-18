@@ -146,4 +146,4 @@ defaults do not — pass an explicit `timeout` to match.
 
 ## License
 
-AGPL-3.0-or-later. See `LICENSE`.
+AGPL-3.0-only. See `LICENSE`.

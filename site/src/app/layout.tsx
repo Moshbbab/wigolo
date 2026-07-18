@@ -82,7 +82,7 @@ const jsonLd = {
   description: DESCRIPTION,
   url: SITE_URL,
   downloadUrl: "https://www.npmjs.com/package/wigolo",
-  softwareVersion: "0.1.x (public beta)",
+  softwareVersion: "0.2.x (public beta)",
   releaseNotes: "https://github.com/KnockOutEZ/wigolo/releases",
   license: "https://www.gnu.org/licenses/agpl-3.0.html",
   offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },

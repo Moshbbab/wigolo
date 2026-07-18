@@ -104,6 +104,14 @@ export interface FetchOutput {
    * successful responses; absent only on StageError replies. */
   fetch_method?: FetchMethod;
   /**
+   * How completely a browser-tier capture rendered its real content (level
+   * full/partial/shell + reason). Present only when the browser tier served
+   * the bytes; absent on HTTP/TLS-tier responses and on cache hits whose row
+   * predates completeness persistence. Lets callers tell a genuine page from
+   * an un-rendered shell without re-parsing the HTML.
+   */
+  content_completeness?: ContentCompleteness;
+  /**
    * Upstream HTTP status code. Surfaced so callers can branch on 404 / 403 /
    * 5xx pages that still render usable HTML (a missing-docs landing page is
    * legitimately fetchable but should not be confused with a successful 200
@@ -909,6 +917,9 @@ export interface CrawlResultItem {
   depth: number;
   evidence?: EvidenceItem[];
   excerpt?: string;
+  /** Per-page render completeness, carried through from the page's fetch.
+   * Absent when the page was served by a non-browser tier. */
+  content_completeness?: ContentCompleteness;
 }
 
 export interface LinkEdge {

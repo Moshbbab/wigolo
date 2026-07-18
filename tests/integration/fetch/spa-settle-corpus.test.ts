@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { BrowserPool } from '../../../src/fetch/browser-pool.js';
+import { SmartRouter, type BrowserPoolInterface, type HttpClient } from '../../../src/fetch/router.js';
+import { httpFetch } from '../../../src/fetch/http-client.js';
+import { handleFetch } from '../../../src/tools/fetch.js';
+import { initDatabase, closeDatabase } from '../../../src/cache/db.js';
 import { resetConfig } from '../../../src/config.js';
 import { startCorpusServer, type CorpusServer } from './spa-settle-corpus/server.js';
 import { ARTICLE_MARKER, NAV_MARKER } from './spa-settle-corpus/fixtures.js';
@@ -84,5 +88,50 @@ describe('SPA settle corpus (real browser)', () => {
   it('code-heavy docs page captures pre/code content', async () => {
     const r = await pool.fetchWithBrowser(`${srv.baseUrl}/code-docs`);
     expect(r.html).toContain(ARTICLE_MARKER);
+  }, 30000);
+});
+
+// End-to-end through the REAL handleFetch pipeline (router → browser pool →
+// extraction), proving the completeness label threads all the way onto the
+// public FetchOutput.content_completeness. render_js:'always' forces the
+// browser tier — a static shell would not self-escalate from the HTTP tier.
+describe('SPA settle corpus → handleFetch content_completeness', () => {
+  let hfSrv: CorpusServer;
+  let hfPool: BrowserPool;
+  let router: SmartRouter;
+
+  beforeAll(async () => {
+    hfSrv = await startCorpusServer();
+  });
+  afterAll(async () => {
+    await hfSrv.close();
+  });
+  beforeEach(() => {
+    process.env.PLAYWRIGHT_NAV_TIMEOUT_MS = '10000';
+    process.env.PLAYWRIGHT_LOAD_TIMEOUT_MS = '5000';
+    resetConfig();
+    initDatabase(':memory:');
+    hfPool = new BrowserPool();
+    const httpClient: HttpClient = { fetch: (url, options) => httpFetch(url, options) };
+    const browserPool: BrowserPoolInterface = {
+      fetchWithBrowser: (url, options) => hfPool.fetchWithBrowser(url, options),
+    };
+    router = new SmartRouter({ httpClient, browserPool, pdfProbe: async () => false });
+  });
+  afterEach(async () => {
+    await hfPool.shutdown();
+    closeDatabase();
+  });
+
+  it('nav-shell page → content_completeness.level === "shell"', async () => {
+    const r = await handleFetch({ url: `${hfSrv.baseUrl}/nav-shell`, render_js: 'always' }, router);
+    const out = r.ok ? r.data : ({ ...r } as never);
+    expect(out.content_completeness?.level).toBe('shell');
+  }, 30000);
+
+  it('instant static page → content_completeness.level === "full"', async () => {
+    const r = await handleFetch({ url: `${hfSrv.baseUrl}/instant`, render_js: 'always' }, router);
+    const out = r.ok ? r.data : ({ ...r } as never);
+    expect(out.content_completeness?.level).toBe('full');
   }, 30000);
 });

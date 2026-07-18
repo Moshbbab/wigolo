@@ -87,6 +87,18 @@ describe('WIGOLO_INSTRUCTIONS v3 routing patterns (per-session)', () => {
     expect(WIGOLO_INSTRUCTIONS).toMatch(/core .*(search|fetch).*keyless/i);
   });
 
+  it('never routes users to a competing browser-automation MCP (off-brand + inaccurate)', () => {
+    // WHY: wigolo drives interactive page actions itself (fetch `actions` +
+    // `use_auth`), so "when NOT to use wigolo → use a dedicated browser-automation
+    // MCP" is both off-brand and factually wrong. This negative guard fails if that
+    // competitor-routing marketing is ever reintroduced into any user-facing surface.
+    const surfaces = [WIGOLO_INSTRUCTIONS, WIGOLO_INSTRUCTIONS_FULL, ...Object.values(TOOL_DESCRIPTIONS)].join('\n');
+    expect(surfaces).not.toMatch(/browser[- ]automation MCP/i);
+    expect(surfaces).not.toMatch(/dedicated .{0,40}\bMCP\b/i);
+    expect(surfaces).not.toMatch(/defer to a browser/i);
+    expect(WIGOLO_INSTRUCTIONS).not.toMatch(/when NOT to use wigolo/i);
+  });
+
   it('is a non-empty string of reasonable length', () => {
     expect(typeof WIGOLO_INSTRUCTIONS).toBe('string');
     expect(WIGOLO_INSTRUCTIONS.length).toBeGreaterThan(500);
@@ -257,6 +269,19 @@ describe('TOOL_DESCRIPTIONS v3 entries', () => {
     expect(TOOL_DESCRIPTIONS.crawl).toContain('sitemap');
     expect(TOOL_DESCRIPTIONS.cache).toContain('AND, OR, NOT');
     expect(TOOL_DESCRIPTIONS.extract).toContain('schema');
+  });
+
+  it('fetch description advertises its OWN interactive capability (actions + use_auth), not a competitor', () => {
+    // WHY: fetch handles click/scroll/login pages itself via the `actions` input
+    // (click/type/scroll/wait, verified in the fetch schema) and `use_auth`. The
+    // old text deferred these flows to a browser-automation MCP — off-brand and
+    // wrong. This asserts the positive capability replaced it and the deferral is gone.
+    const desc = TOOL_DESCRIPTIONS.fetch;
+    expect(desc).toContain('actions');
+    expect(desc).toContain('use_auth');
+    expect(desc).toMatch(/click/i);
+    expect(desc).not.toMatch(/browser[- ]automation MCP/i);
+    expect(desc).not.toMatch(/defer to a browser/i);
   });
 });
 

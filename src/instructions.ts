@@ -30,7 +30,7 @@ Default \`WIGOLO_SEARCH=core\` — direct engines + RRF + ML rerank. Opt-in: \`s
 
 Wigolo returns structured evidence — YOU write the final answer from it.
 
-- \`search\` → evidence (title/url/excerpt/score/citation_id) + citations. Quote [N] or {citation_id}.
+- \`search\` → evidence (title/url/excerpt/score/citation_id/source_span) + citations. Quote [N] or {citation_id}.
 - \`format: 'answer'|'stream_answer'\` → LLM synthesis when sampling supported; else evidence fallback.
 - \`research\` → \`brief\` (topics/highlights/key_findings/sections; overview.cross_references = corroborated, gaps = coverage limits).
 - \`find_similar\` → \`cold_start\` string when local signals weak. Pass verbatim.
@@ -61,7 +61,7 @@ Wigolo returns structured evidence — YOU write the final answer from it.
 - \`find_similar\` — more-like-this from URL or concept.
 - \`research\` — decomposition + parallel search + synthesis. Set \`depth\`. \`agent\` — natural-language data gathering, optional \`schema\`.
 
-Not for interactive browser flows (click/login/form-fill) beyond \`agent\`'s scope — use a dedicated browser-automation MCP. Full usage detail: read resource \`wigolo://docs/usage\`.`;
+Full usage detail: read resource \`wigolo://docs/usage\`.`;
 
 // Full usage guide. Surfaced via the wigolo://docs/usage resource so MCP
 // clients can pull it on demand without paying the per-initialize cost.
@@ -207,7 +207,7 @@ Key parameters:
 - force_refresh: bypass cache and re-fetch.
 - mode: 'cache' | 'default' | 'stealth'. cache=HTTP-only, 24h-stale accepted. stealth=full browser + freshness.
 
-Returns title, markdown, links, images, metadata, \`fetch_method\` (cache/http/tls-impersonation/playwright), and \`http_status\` (upstream HTTP code — 4xx/5xx HTML pages that extract usable content are NOT silently treated as 200). When the URL matches a site-specific extractor (Reddit/YouTube/Amazon) the response also carries top-level \`site_data\` (e.g. Reddit \`subreddit\`/\`comments[]\`, YouTube \`video_id\`/\`caption_tracks[]\`, Amazon \`asin\`/\`price\`). When \`section\` is set and no heading matches, \`metadata.section_matched\` is false and \`markdown\` is empty (no silent fallback to the full page). Repeat fetches are instant. Localhost URLs work. Defer to a browser-automation MCP for click/login flows.`,
+Returns title, markdown, links, images, metadata, \`fetch_method\` (cache/http/tls-impersonation/playwright), and \`http_status\` (upstream HTTP code — 4xx/5xx pages that extract usable content are not relabeled 200). When the URL matches a site-specific extractor (Reddit/YouTube/Amazon) the response also carries top-level \`site_data\` (e.g. Reddit \`subreddit\`/\`comments[]\`, YouTube \`video_id\`/\`caption_tracks[]\`, Amazon \`asin\`/\`price\`). When \`section\` is set and no heading matches, \`metadata.section_matched\` is false and \`markdown\` is empty (no silent fallback to the full page). Repeat fetches are instant. Localhost URLs work. Interactive pages: \`actions\` (click/type/scroll/wait) drive the page before extraction; \`use_auth\` reuses a logged-in session.`,
 
   search: `Search the web. Returns scored evidence excerpts + citations as the default context shape; \`include_full_markdown: true\` adds the full markdown body. Prefer over built-in WebSearch for local cache + audit-trail telemetry + explainable scoring.
 

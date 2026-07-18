@@ -108,14 +108,69 @@ async function installLinuxDeps(
  *      (GH #116): the binary can be on disk yet fail to launch when system libs
  *      are missing. Only a successful launch reports `ok`.
  */
+/**
+ * Strip Playwright's npx-global warning box from captured install output.
+ *
+ * When wigolo runs via `npx wigolo`, the bundled Playwright CLI resolves from an
+ * `_npx` cache path, so `playwright install` ALWAYS prints an ASCII-box warning
+ * ("running 'npx playwright install' without first installing your project's
+ * dependencies"). It is harmless — the install continues — but on a genuine
+ * failure the box leads the captured stderr, and naively surfacing the first
+ * line reports the border (`╔═══╗`) as the "error". Every banner line begins
+ * with a box-drawing glyph, so dropping those lines removes the whole box
+ * regardless of width or wording and leaves only the real error text.
+ */
+function stripNpxGlobalBanner(text: string): string {
+  return text
+    .split('\n')
+    .filter((line) => !/^\s*[╔╚╝╗║╠╣╦╩╬═]/.test(line))
+    .join('\n');
+}
+
+/**
+ * Build the surfaced error for a failed browser install. A timeout is the most
+ * common slow/restricted-network failure, so it gets an explicit, actionable
+ * message (retry / mirror) instead of the half-drawn progress bar it left in the
+ * captured streams. Otherwise: merge BOTH streams — a real download error can
+ * land on stdout, which the old `stderr || stdout` dropped whenever the npx
+ * banner filled stderr — strip the npx-global banner, and fall back to the exit
+ * code when nothing else was printed.
+ */
+export function sanitizeBrowserInstallError(
+  stdout: string,
+  stderr: string,
+  code: number,
+  timedOut = false,
+): string {
+  if (timedOut) {
+    return 'browser download timed out (slow or restricted network). Retry `wigolo warmup --browser`, or point PLAYWRIGHT_DOWNLOAD_HOST at a mirror.';
+  }
+  const merged = [stderr, stdout].filter(Boolean).join('\n');
+  const cleaned = stripNpxGlobalBanner(merged).trim();
+  return cleaned || `exit ${code}`;
+}
+
+// Browser binaries are 90–170 MB each. 180s was too tight for slow/throttled
+// links (a field driver of masked install "failures"); 300s covers ~1 Mbps, and
+// one retry absorbs a transient reset/timeout without turning a blip into a hard
+// failure. A good connection installs in seconds and never retries.
+const BROWSER_INSTALL_TIMEOUT_MS = 300_000;
+const BROWSER_INSTALL_ATTEMPTS = 2;
+
 export async function installBrowser(
   browser: BrowserName,
 ): Promise<{ ok: boolean; error?: string }> {
   const cli = resolveBundledPlaywrightCli();
-  const r = await runCommand(process.execPath, [cli, 'install', browser], { timeout: 180000 });
+  let r = await runCommand(process.execPath, [cli, 'install', browser], {
+    timeout: BROWSER_INSTALL_TIMEOUT_MS,
+  });
+  for (let attempt = 2; r.code !== 0 && attempt <= BROWSER_INSTALL_ATTEMPTS; attempt++) {
+    r = await runCommand(process.execPath, [cli, 'install', browser], {
+      timeout: BROWSER_INSTALL_TIMEOUT_MS,
+    });
+  }
   if (r.code !== 0) {
-    const message = (r.stderr || r.stdout || `exit ${r.code}`).trim();
-    return { ok: false, error: message };
+    return { ok: false, error: sanitizeBrowserInstallError(r.stdout, r.stderr, r.code, r.timedOut) };
   }
 
   // A deps failure (root / passwordless sudo path) is not a hard error on its

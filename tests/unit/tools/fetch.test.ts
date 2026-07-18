@@ -163,7 +163,7 @@ describe('handleFetch', () => {
   it('surfaces content_completeness on the output when the router result carries it (browser tier)', async () => {
     extractMock.mockResolvedValue(makeExtraction());
     const router = mockRouter({
-      method: 'playwright',
+      method: 'browser',
       contentCompleteness: { level: 'shell', reason: 'app_shell', settled_by: 'budget' },
     });
     const input: FetchInput = { url: 'https://example.com' };

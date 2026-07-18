@@ -24,7 +24,7 @@ function makeRaw(url: string, completeness?: ContentCompleteness): RawFetchResul
     html: ARTICLE_HTML,
     contentType: 'text/html',
     statusCode: 200,
-    method: 'playwright',
+    method: 'browser',
     headers: {},
     ...(completeness ? { contentCompleteness: completeness } : {}),
   };
